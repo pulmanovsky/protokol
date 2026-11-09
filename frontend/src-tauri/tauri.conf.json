@@ -1,0 +1,118 @@
+{
+    "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+    "productName": "Протокол",
+    "version": "0.3.7",
+    "identifier": "ua.protokol.app",
+    "build": {
+        "frontendDist": "../out",
+        "devUrl": "http://localhost:3118",
+        "beforeDevCommand": "pnpm dev",
+        "beforeBuildCommand": "pnpm build"
+    },
+    "app": {
+        "windows": [
+            {
+                "title": "Протокол",
+                "width": 1100,
+                "height": 700,
+                "minWidth": 760,
+                "minHeight": 520,
+                "resizable": true,
+                "fullscreen": false,
+                "decorations": true,
+                "transparent": true,
+                "titleBarStyle": "Overlay",
+                "hiddenTitle": true,
+                "trafficLightPosition": { "x": 15, "y": 26 },
+                "windowEffects": {
+                    "effects": ["sidebar"],
+                    "state": "followsWindowActiveState"
+                }
+            }
+        ],
+        "macOSPrivateApi": true,
+        "security": {
+            "csp": {
+                "default-src": "'self'",
+                "style-src": "'self' 'unsafe-inline'",
+                "img-src": "'self' asset: https://asset.localhost data:",
+                "media-src": "'self' asset: http://asset.localhost https://asset.localhost blob:",
+                "connect-src": "'self' ipc: http://ipc.localhost"
+            },
+            "assetProtocol": {
+                "enable": true,
+                "scope": [
+                    "$APPDATA/**"
+                ]
+            },
+            "capabilities": [
+                {
+                    "identifier": "main",
+                    "description": "Main window capability with file system and media access",
+                    "windows": ["main", "island"],
+                    "permissions": [
+                        "core:path:default",
+                        "core:event:default",
+                        "core:window:default",
+                        "core:window:allow-start-dragging",
+                        "core:window:allow-set-position",
+                        "core:window:allow-internal-toggle-maximize",
+                        "core:window:allow-set-theme",
+                        "core:app:default",
+                        "core:resources:default",
+                        "core:menu:default",
+                        "core:tray:default",
+                        "core:window:allow-set-title",
+                        "store:default",
+                        "notification:default",
+                        "notification:allow-is-permission-granted",
+                        "process:default"
+                    ]
+                }
+            ]
+        }
+    },
+    "bundle": {
+        "active": true,
+        "targets": [
+            "deb",
+            "appimage",
+            "msi",
+            "nsis",
+            "app",
+            "dmg"
+        ],
+        "createUpdaterArtifacts": true,
+        "icon": [
+            "icons/icon.png",
+            "icons/app_icon.icns",
+            "icons/app_icon.ico"
+        ],
+        "resources": [
+            "templates/*.json",
+            "aligner-model/*",
+            "licenses/*"
+        ],
+        "externalBin": [
+            "binaries/llama-helper",
+            "binaries/ffmpeg"
+        ],
+        "macOS": {
+            "entitlements": "entitlements.plist",
+            "signingIdentity": "-",
+            "hardenedRuntime": true
+        },
+        "windows": {
+            "signCommand": "powershell -ExecutionPolicy Bypass -File scripts/sign-windows.ps1 -FilePath %1"
+        }
+    },
+    "plugins": {
+        "updater": {
+            "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIxMUQyNTA4NUU1OTNCREYKUldUZk8xbGVDQ1Vkc1dyOGxOdGV4N0x5Nis1SU1VcXJ6Z3puQUtSTlNoZnFtZ2I5Q05OdloyZEsK",
+            "endpoints": [
+                "https://github.com/pulmanovsky/protokol/releases/latest/download/latest.json"
+            ],
+            "dangerousInsecureTransportProtocol": false
+        }
+    }
+}
