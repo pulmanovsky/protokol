@@ -264,6 +264,10 @@ impl SummaryService {
             .is_some_and(|entry| entry.started_at == started_at)
         {
             registry.remove(meeting_id);
+            // The last step of a finished document is not «now»
+            if registry.is_empty() {
+                crate::summary::processor::clear_current_stage();
+            }
             info!("Cleaned up cancellation token for meeting: {}", meeting_id);
         }
     }
@@ -586,6 +590,10 @@ impl SummaryService {
                 info!("Dictionary learned {} name(s) from recent meetings", learned.len());
             }
         }
+        // The fingerprint of the transcript as the page sent it: the page
+        // compares it with the transcript it would send now, before the
+        // markers and corrections below change it
+        let source_hash = crate::database::repositories::document_variant::source_hash(&text);
         let text = crate::ukrainian::strip_mic_markers(&text);
         let text = crate::ukrainian::corrections::apply_corrections(&text);
 
@@ -663,6 +671,10 @@ impl SummaryService {
                 .await
                 {
                     Ok(true) => {
+                        // Kept under its template, with the transcript's fingerprint
+                        if let Err(e) = crate::database::repositories::document_variant::DocumentVariantsRepository::record(&pool, &meeting_id, &template_id, Some(&source_hash)).await {
+                            warn!("Document not kept under its template: {e}");
+                        }
                         // The document's heading is its type («Щоденна нарада (доповіді)»,
                         // «Матеріали наради»), not the meeting's name: keep the meeting's own title
                         let generic = |name: &str| {

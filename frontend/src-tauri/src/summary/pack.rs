@@ -26,7 +26,8 @@ pub struct Pack {
     /// (file name without extension, the meeting type)
     pub meeting_types: Vec<(String, serde_json::Value)>,
     pub glossary: Vec<String>,
-    pub vocabulary: Vocabulary,
+    /// None (a file with templates only): the vocabulary already here stays
+    pub vocabulary: Option<Vocabulary>,
 }
 
 static VOCABULARY: RwLock<Option<Vocabulary>> = RwLock::new(None);
@@ -84,8 +85,10 @@ pub fn import(text: &str, dir: &Path, types_dir: &Path) -> Result<(usize, usize)
         }
         std::fs::write(&file, body).map_err(|e| e.to_string())?;
     }
-    let json = serde_json::to_string_pretty(&pack.vocabulary).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join(FILE), json).map_err(|e| e.to_string())?;
+    if let Some(vocabulary) = &pack.vocabulary {
+        let json = serde_json::to_string_pretty(vocabulary).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join(FILE), json).map_err(|e| e.to_string())?;
+    }
     load(dir);
     Ok((pack.meeting_types.len(), new.len()))
 }
@@ -134,6 +137,17 @@ mod tests {
         assert_eq!(worded_with("хто: ім'я", &v), "хто: позначка");
         assert_eq!(v.not_names, vec!["слово"]);
         assert!(import(r#"{"meeting_types":[["../x",{}]]}"#, dir.path(), &types).is_err());
+    }
+
+    #[test]
+    fn a_file_with_one_template_keeps_the_vocabulary_already_here() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(FILE), r#"{"not_names":["слово"]}"#).unwrap();
+        let types = dir.path().join("meeting-types");
+        let one = r#"{"meeting_types":[["Своя",{"name":"Своя","description":"x","sections":[{"title":"А","instruction":"Б","format":"list"}]}]]}"#;
+        assert_eq!(import(one, dir.path(), &types).unwrap(), (1, 0));
+        let v: Vocabulary = serde_json::from_str(&std::fs::read_to_string(dir.path().join(FILE)).unwrap()).unwrap();
+        assert_eq!(v.not_names, vec!["слово"]);
     }
 
     #[test]

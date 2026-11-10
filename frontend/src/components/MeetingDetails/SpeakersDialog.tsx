@@ -393,7 +393,7 @@ export function SpeakersDialog({ open, onOpenChange, meetingId, onChanged, onJum
                   <input
                     className="w-36 shrink-0 px-2 py-1 text-sm border border-gray-300 rounded-md"
                     placeholder="Роль: керівник…"
-                    title="Необов'язково. Типи записів можуть ділити розмову на частини за ролями (напр. «керівник», «доповідач»)"
+                    title="Необов'язково. Шаблони документа можуть ділити розмову на частини за ролями (напр. «керівник», «доповідач»)"
                     value={roles[s.label] ?? ''}
                     onChange={(e) => setRoles((r) => ({ ...r, [s.label]: e.target.value }))}
                   />

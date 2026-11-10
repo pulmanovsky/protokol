@@ -89,7 +89,7 @@ pub fn list_template_ids() -> Vec<String> {
 /// The meeting type that fits a meeting best, by words in its title and the
 /// hour it started; None when nothing fits (the app keeps the default)
 pub fn suggest_template(title: &str, hour: u32) -> Option<String> {
-    let types = list_template_ids().into_iter().filter_map(|id| get_template(&id).ok().and_then(|t| t.meeting).map(|m| (id, m))).collect::<Vec<_>>();
+    let types = offered_template_ids().into_iter().filter_map(|id| get_template(&id).ok().and_then(|t| t.meeting).map(|m| (id, m))).collect::<Vec<_>>();
     best_type(&types, title, hour)
 }
 
@@ -108,9 +108,14 @@ fn best_type(types: &[(String, super::types::MeetingSpec)], title: &str, hour: u
     best.map(|(_, id)| id.clone())
 }
 
-/// (id, name, description) of every template
+/// The templates offered to choose from: all but `NOT_OFFERED`
+pub fn offered_template_ids() -> Vec<String> {
+    list_template_ids().into_iter().filter(|id| !defaults::NOT_OFFERED.contains(&id.as_str())).collect()
+}
+
+/// (id, name, description) of every template offered
 pub fn list_templates() -> Vec<(String, String, String)> {
-    list_template_ids()
+    offered_template_ids()
         .into_iter()
         .filter_map(|id| get_template(&id).ok().map(|t| (id, t.name, t.description)))
         .collect()
@@ -125,9 +130,12 @@ mod tests {
         let template = get_template(DEFAULT_TEMPLATE_ID).unwrap();
         assert_eq!(template.name, "Стенограма");
         let materials = get_template("meeting_materials_uk").unwrap();
-        assert_eq!(materials.name, "Загальна зустріч");
-        let titles: Vec<_> = materials.sections.iter().map(|s| s.title.as_str()).collect();
-        assert_eq!(titles, ["Хід наради", "Рішення", "Завдання", "Відкриті питання"]);
+        assert_eq!(materials.name, "Підсумки доповідачів");
+        let spec = materials.meeting.unwrap();
+        assert!(spec.ordered);
+        assert_eq!(spec.blocks, ["Хід наради", "Загальний підсумок"]);
+        let decisions = get_template("decisions_tasks_uk").unwrap().meeting.unwrap();
+        assert_eq!(decisions.speaker_document_blocks(), ["Рішення", "Завдання"]);
     }
 
     #[test]
@@ -147,11 +155,15 @@ mod tests {
     }
 
     #[test]
-    fn the_formats_are_listed_stenogram_first() {
+    fn the_main_template_is_offered_first_and_the_old_daily_one_not_at_all() {
         assert_eq!(
-            list_template_ids(),
-            vec![DEFAULT_TEMPLATE_ID.to_string(), "daily_reports_uk".into(), "daily_reports_fields_uk".into(), "control_meeting_uk".into(), "meeting_materials_uk".into()]
+            offered_template_ids(),
+            vec!["meeting_materials_uk".to_string(), "decisions_tasks_uk".into(), "daily_reports_fields_uk".into(), DEFAULT_TEMPLATE_ID.into(), "control_meeting_uk".into()]
         );
+        assert!(list_templates().iter().all(|(id, _, _)| id != "daily_reports_uk"));
+        // Still opens: documents made with it, «Контрольна нарада» checks it
+        assert!(list_template_ids().contains(&"daily_reports_uk".to_string()));
+        assert!(get_template("daily_reports_uk").unwrap().meeting.is_some());
     }
 
     #[test]
@@ -161,7 +173,8 @@ mod tests {
             assert!(ids.contains(&id.to_string()), "{id}");
         }
         assert!(get_template("daily_reports_uk").unwrap().meeting.unwrap().report_fields.len() == 5);
-        assert_eq!(suggest_template("Ранкова нарада", 8).as_deref(), Some("daily_reports_uk"));
+        // The old daily type is no longer suggested
+        assert_eq!(suggest_template("Ранкова нарада", 8), None);
         assert_eq!(suggest_template("Вечірня нарада", 18).as_deref(), Some("control_meeting_uk"));
         // A default title («Запис …») at an ordinary hour keeps «Стенограма»
         assert_eq!(suggest_template("Запис 06.11.2026 13:00", 13), None);

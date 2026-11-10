@@ -60,6 +60,12 @@ interface SummaryPanelProps {
   onTextClick?: (event: React.MouseEvent) => void;
   /** A note under the toolbar (the transcript not fully checked) */
   banner?: React.ReactNode;
+  /** The template button in the toolbar (in place of the model's) */
+  templateSlot?: React.ReactNode;
+  /** What the tab shows before a document exists (the template cards) */
+  emptyState?: React.ReactNode;
+  /** Changes when another document is shown: the editor starts afresh */
+  docKey?: string;
 }
 
 export function SummaryPanel({
@@ -91,6 +97,9 @@ export function SummaryPanel({
   footer,
   onTextClick,
   banner,
+  templateSlot,
+  emptyState,
+  docKey,
 }: SummaryPanelProps) {
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState('');
@@ -283,6 +292,8 @@ export function SummaryPanel({
           isModelConfigLoading={isModelConfigLoading}
           onOpenModelSettings={onOpenModelSettings}
           languageSlot={transcripts.length > 0 || hasSummary ? languageSlot : undefined}
+          templateSlot={hasSummary ? templateSlot : undefined}
+          showModelButton={!templateSlot}
         />
         {hasSummary && !isSummaryLoading && (isSummaryDirty || isSaving) && (
           <button
@@ -328,6 +339,8 @@ export function SummaryPanel({
         <div className="flex items-center justify-center flex-1">
           <DocumentProgress />
         </div>
+      ) : !hasSummary && emptyState ? (
+        <div className="flex flex-1 min-h-0 flex-col">{emptyState}</div>
       ) : !hasSummary ? (
         <div className="flex flex-1 min-h-0 flex-col">
           <EmptyStateSummary
@@ -347,6 +360,7 @@ export function SummaryPanel({
           <div className="doc-sheet relative">
             <DocSectionCopy summaryRef={summaryRef} />
             <BlockNoteSummaryView
+              key={docKey}
               ref={summaryRef}
               summaryData={aiSummary}
               onSave={onSaveSummary}

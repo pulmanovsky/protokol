@@ -1,15 +1,20 @@
-//! Meeting types the user edits in Settings: a simple form (name, what to
-//! note per speaker, parts, document blocks, hints) saved as the user's own
-//! type in `<app data>/meeting-types/`. Built-in types are never changed: a
-//! change to one is saved as a copy.
+//! Document templates the user edits in Settings: a simple form (name, the
+//! document's blocks in order, how each speaker is written up, length,
+//! wishes; parts and hints under «Додатково») saved as the user's own
+//! template in `<app data>/meeting-types/`. Built-in templates are never
+//! changed: a change to one is saved as a copy.
 
 use serde::{Deserialize, Serialize};
 
 use super::loader::{custom_dir, get_template, list_template_ids, validate_and_parse_template};
-use super::types::{MeetingPart, MeetingSpec, Template, TemplateSection};
+use super::types::{MeetingPart, MeetingSpec, Template, TemplateSection, OVERALL_BLOCK};
 
 /// The blocks a document can have, in the usual order
-pub const BLOCKS: &[&str] = &["Контроль", "Хід наради", "Рішення", "Завдання", "Відкриті питання", "Не доповідали", "Стенограма"];
+pub const BLOCKS: &[&str] = &["Контроль", "Хід наради", "Рішення", "Завдання", "Відкриті питання", OVERALL_BLOCK, "Не доповідали", "Стенограма"];
+
+/// How each speaker is written up: short points, or the template's fields
+pub const STYLE_POINTS: &str = "points";
+pub const STYLE_FIELDS: &str = "fields";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +32,15 @@ pub struct MeetingTypeForm {
     /// «Групувати за спікером»
     #[serde(default)]
     pub group_by_speaker: bool,
+    /// `STYLE_POINTS` («Короткими пунктами») or `STYLE_FIELDS` («За полями»)
+    #[serde(default)]
+    pub style: String,
+    /// «Докладніше»
+    #[serde(default)]
+    pub detailed: bool,
+    /// «Побажання до тексту»
+    #[serde(default)]
+    pub wishes: String,
     /// Built-in types are read-only
     pub built_in: bool,
 }
@@ -35,17 +49,23 @@ pub fn form_of(id: &str) -> Result<MeetingTypeForm, String> {
     let t = get_template(id)?;
     let spec = t.meeting.clone().unwrap_or_default();
     let group_by_speaker = spec.groups_by_speaker();
+    // What the document really has: types saved before 0.3.8 write the
+    // speakers' blocks and the overall summary whatever their blocks say
+    let blocks = if spec.classic { spec.blocks.clone() } else { spec.speaker_document_blocks() };
     Ok(MeetingTypeForm {
         id: Some(id.to_string()),
         name: t.name,
         description: t.description,
         report_fields: spec.report_fields,
         parts: spec.parts,
-        blocks: spec.blocks,
+        blocks,
         title_hints: spec.title_hints,
         hours: spec.hours,
         group_by_speaker,
         controls: spec.controls,
+        style: if spec.classic { STYLE_FIELDS } else { STYLE_POINTS }.to_string(),
+        detailed: spec.detailed,
+        wishes: spec.wishes.unwrap_or_default(),
         built_in: !id.starts_with("custom:"),
     })
 }
@@ -66,9 +86,20 @@ pub fn template_of(form: &MeetingTypeForm) -> Result<Template, String> {
     if name.is_empty() {
         return Err("Вкажіть назву типу".into());
     }
-    let blocks: Vec<String> = BLOCKS.iter().filter(|b| form.blocks.iter().any(|x| x == *b)).map(|b| b.to_string()).collect();
+    // In the form's order; unknown and repeated blocks dropped
+    let mut blocks: Vec<String> = Vec::new();
+    for b in &form.blocks {
+        if BLOCKS.contains(&b.as_str()) && !blocks.contains(b) {
+            blocks.push(b.clone());
+        }
+    }
     if blocks.is_empty() {
         return Err("Виберіть хоча б один розділ документа".into());
+    }
+    let by_fields = form.style == STYLE_FIELDS;
+    let report_fields = if by_fields { clean(&form.report_fields) } else { Vec::new() };
+    if by_fields && blocks.iter().any(|b| b == "Хід наради") && report_fields.is_empty() {
+        return Err("Додайте хоча б одне поле або виберіть «Короткими пунктами»".into());
     }
     let parts: Vec<MeetingPart> = form
         .parts
@@ -90,7 +121,7 @@ pub fn template_of(form: &MeetingTypeForm) -> Result<Template, String> {
             example_item_format: None,
         })
         .collect();
-    let description = if form.description.trim().is_empty() { format!("Тип «{name}»") } else { form.description.trim().to_string() };
+    let description = if form.description.trim().is_empty() { describe(&blocks, &report_fields) } else { form.description.trim().to_string() };
     Ok(Template {
         name: name.to_string(),
         description,
@@ -99,16 +130,46 @@ pub fn template_of(form: &MeetingTypeForm) -> Result<Template, String> {
         examples: Vec::new(),
         style_notes: Some("Пиши ясно і стисло, звичайною діловою мовою. Кожен пункт — одне коротке речення.".into()),
         meeting: Some(MeetingSpec {
-            report_fields: clean(&form.report_fields),
+            report_fields,
             parts,
             blocks,
             title_hints: clean(&form.title_hints).into_iter().map(|h| h.to_lowercase()).collect(),
             hours: form.hours.iter().copied().filter(|h| *h < 24).collect(),
             controls: form.controls.clone().filter(|c| list_template_ids().contains(c)),
             group_by_speaker: Some(form.group_by_speaker),
-            classic: false,
+            classic: by_fields,
+            ordered: true,
+            detailed: form.detailed,
+            wishes: Some(form.wishes.trim().to_string()).filter(|w| !w.is_empty()),
         }),
     })
+}
+
+/// What the document has, in words: «Підсумок кожного доповідача, завдання.»
+fn describe(blocks: &[String], report_fields: &[String]) -> String {
+    let words: Vec<String> = blocks
+        .iter()
+        .map(|b| match b.as_str() {
+            "Хід наради" if !report_fields.is_empty() => format!("кожен доповідач за полями ({})", report_fields.join(", ").to_lowercase()),
+            "Хід наради" => "підсумок кожного доповідача".into(),
+            "Контроль" => "контроль попередніх завдань".into(),
+            "Не доповідали" => "хто не доповідав".into(),
+            "Стенограма" => "повна стенограма".into(),
+            other => other.to_lowercase(),
+        })
+        .collect();
+    let text = words.join(", ");
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
+        None => String::new(),
+    }
+}
+
+/// The template as a file to keep or pass on (what «Імпорт із файлу» reads)
+pub fn export(id: &str) -> Result<String, String> {
+    let template = get_template(id)?;
+    serde_json::to_string_pretty(&template).map_err(|e| e.to_string())
 }
 
 /// Saves the form as the user's own type; returns its id. A built-in type
@@ -167,6 +228,9 @@ mod tests {
             hours: vec![9, 30],
             controls: Some("немає такого".into()),
             group_by_speaker: true,
+            style: STYLE_FIELDS.into(),
+            detailed: true,
+            wishes: "  Посади писати повністю ".into(),
             built_in: false,
         }
     }
@@ -176,9 +240,12 @@ mod tests {
         let t = template_of(&form()).unwrap();
         assert_eq!(t.name, "Планування тижня");
         let spec = t.meeting.unwrap();
-        // Blocks in the usual order, unknown ones dropped
-        assert_eq!(spec.blocks, vec!["Хід наради", "Завдання"]);
+        // Blocks in the form's order, unknown ones dropped
+        assert_eq!(spec.blocks, vec!["Завдання", "Хід наради"]);
         assert_eq!(spec.report_fields, vec!["Зроблено", "Ризики"]);
+        assert!(spec.classic && spec.ordered && spec.detailed);
+        assert_eq!(spec.wishes.as_deref(), Some("Посади писати повністю"));
+        assert_eq!(t.description, "Завдання, кожен доповідач за полями (зроблено, ризики).");
         assert_eq!(spec.parts.len(), 1);
         assert_eq!(spec.parts[0].cues, vec!["почнемо з огляду"]);
         assert_eq!(spec.parts[0].role, None);
@@ -195,6 +262,36 @@ mod tests {
         let mut f = form();
         f.blocks.clear();
         assert!(template_of(&f).is_err());
+    }
+
+    #[test]
+    fn short_points_need_no_fields_and_keep_the_order() {
+        let mut f = form();
+        f.style = STYLE_POINTS.into();
+        f.blocks = vec![OVERALL_BLOCK.into(), "Хід наради".into(), "Стенограма".into(), OVERALL_BLOCK.into()];
+        let t = template_of(&f).unwrap();
+        let spec = t.meeting.unwrap();
+        assert!(!spec.classic && spec.ordered);
+        assert!(spec.report_fields.is_empty());
+        assert_eq!(spec.speaker_document_blocks(), vec![OVERALL_BLOCK, "Хід наради", "Стенограма"]);
+        assert_eq!(t.description, "Загальний підсумок, підсумок кожного доповідача, повна стенограма.");
+        // «За полями» with no field is refused
+        let mut f = form();
+        f.report_fields = vec![" ".into()];
+        assert!(template_of(&f).is_err());
+    }
+
+    #[test]
+    fn a_type_saved_before_shows_what_its_document_has() {
+        // An old type: blocks listed, but the document is speakers' blocks and the overall summary
+        let old = MeetingSpec { blocks: vec!["Хід наради".into(), "Рішення".into()], ..Default::default() };
+        assert_eq!(old.speaker_document_blocks(), vec!["Хід наради", OVERALL_BLOCK]);
+        let f = form_of("meeting_materials_uk").unwrap();
+        assert_eq!(f.style, STYLE_POINTS);
+        assert_eq!(f.blocks, vec!["Хід наради", OVERALL_BLOCK]);
+        let f = form_of("daily_reports_fields_uk").unwrap();
+        assert_eq!(f.style, STYLE_FIELDS);
+        assert!(export("decisions_tasks_uk").unwrap().contains("Рішення та завдання"));
     }
 
     #[test]

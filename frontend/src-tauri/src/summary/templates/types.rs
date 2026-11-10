@@ -35,6 +35,9 @@ pub struct MeetingPart {
     pub role: Option<String>,
 }
 
+/// The block with the overall summary of the meeting
+pub const OVERALL_BLOCK: &str = "Загальний підсумок";
+
 /// How a meeting of this type is written up: one engine, different recipes
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MeetingSpec {
@@ -67,6 +70,17 @@ pub struct MeetingSpec {
     /// per speaker and an overall summary
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub classic: bool,
+    /// The document has exactly `blocks`, in that order («Загальний підсумок»
+    /// among them). Unset (types saved before 0.3.8): speakers' blocks and
+    /// the overall summary, whatever `blocks` says
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ordered: bool,
+    /// «Докладніше»: more and longer points per speaker
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub detailed: bool,
+    /// «Побажання до тексту»: the secretary's own words to the model
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wishes: Option<String>,
 }
 
 impl MeetingSpec {
@@ -79,11 +93,19 @@ impl MeetingSpec {
     pub fn groups_by_speaker(&self) -> bool {
         self.group_by_speaker.unwrap_or(!self.report_fields.is_empty())
     }
+    /// The blocks the document made of speakers' blocks has, in order
+    pub fn speaker_document_blocks(&self) -> Vec<String> {
+        if self.ordered {
+            self.blocks.clone()
+        } else {
+            vec!["Хід наради".to_string(), OVERALL_BLOCK.to_string()]
+        }
+    }
 }
 
 impl Default for MeetingSpec {
     fn default() -> Self {
-        Self { report_fields: Vec::new(), parts: Vec::new(), blocks: Self::default_blocks(), title_hints: Vec::new(), hours: Vec::new(), controls: None, group_by_speaker: None, classic: false }
+        Self { report_fields: Vec::new(), parts: Vec::new(), blocks: Self::default_blocks(), title_hints: Vec::new(), hours: Vec::new(), controls: None, group_by_speaker: None, classic: false, ordered: false, detailed: false, wishes: None }
     }
 }
 

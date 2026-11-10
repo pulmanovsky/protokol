@@ -11,7 +11,7 @@ import { SummaryModelSettings } from '@/components/SummaryModelSettings';
 import { BetaSettings } from '@/components/BetaSettings';
 import { CalendarSettings } from '@/components/CalendarSettings';
 import { About } from '@/components/About';
-import { MeetingTypesSettings } from '@/components/MeetingTypesSettings';
+import { DocumentTemplatesSettings } from '@/components/DocumentTemplatesSettings';
 import { AppearanceSettings } from '@/components/AppearanceSettings';
 import { useConfig } from '@/contexts/ConfigContext';
 
@@ -21,7 +21,7 @@ const SECTIONS = [
   { value: 'recording', label: 'Запис', icon: Mic },
   { value: 'transcription', label: 'Розпізнавання', icon: AudioLines },
   { value: 'protocol', label: 'Документ і модель', icon: FileText },
-  { value: 'types', label: 'Типи записів', icon: ListChecks },
+  { value: 'types', label: 'Шаблони документа', icon: ListChecks },
   { value: 'calendar', label: 'Календар', icon: CalendarDays },
   { value: 'appearance', label: 'Вигляд', icon: Palette },
   { value: 'about', label: 'Про програму', icon: InfoIcon },
@@ -123,7 +123,7 @@ function SettingsContent() {
                 setTranscriptModelConfig={setTranscriptModelConfig}
               />
             )}
-            {active === 'types' && <MeetingTypesSettings />}
+            {active === 'types' && <DocumentTemplatesSettings />}
             {active === 'protocol' && <SummaryModelSettings />}
             {active === 'calendar' && <CalendarSettings />}
             {active === 'appearance' && <AppearanceSettings />}

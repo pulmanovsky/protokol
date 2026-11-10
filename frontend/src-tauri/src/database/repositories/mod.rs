@@ -1,3 +1,4 @@
+pub mod document_variant;
 pub mod meeting;
 pub mod setting;
 pub mod summary;

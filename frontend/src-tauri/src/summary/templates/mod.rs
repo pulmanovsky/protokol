@@ -8,11 +8,11 @@ mod types;
 
 // Re-export public API
 pub use loader::{
-    get_template, list_template_ids, list_templates, set_bundled_templates_dir, set_custom_templates_dir, suggest_template,
+    get_template, list_template_ids, list_templates, offered_template_ids, set_bundled_templates_dir, set_custom_templates_dir, suggest_template,
     validate_and_parse_template,
     DEFAULT_TEMPLATE_ID,
 };
-pub use types::{MeetingPart, MeetingSpec, Template, TemplateSection};
+pub use types::{MeetingPart, MeetingSpec, Template, TemplateSection, OVERALL_BLOCK};
 
 #[cfg(test)]
 mod tests {

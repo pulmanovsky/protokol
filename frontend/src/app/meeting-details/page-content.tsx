@@ -12,6 +12,11 @@ import { TranscriptWorkspace } from '@/components/MeetingDetails/TranscriptWorks
 import { Timeline, type TimelineLine } from '@/components/MeetingDetails/Timeline';
 import { speakerColorMap } from '@/lib/speakerColors';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
+import { TemplatePicker } from '@/components/MeetingDetails/TemplatePicker';
+import { TemplateMenu } from '@/components/MeetingDetails/TemplateMenu';
+import { parseSummaryContent } from '@/lib/summary-content';
+import { estimateLabel, isTranscriptOnly } from '@/lib/documentTemplates';
+import { confirmNative } from '@/lib/confirm';
 import { DocSourcePanel } from '@/components/MeetingDetails/DocSourcePanel';
 import { followPlayhead, setPlayheadRunning, setPlayheadSource } from '@/lib/playhead';
 import { toPlayer, toSound, type TimePoints } from '@/lib/playerTime';
@@ -207,6 +212,93 @@ export default function PageContent({
     0,
   );
 
+  // Documents by template: the one shown, the others kept; a note when the
+  // transcript changed since the document shown was made
+  const [docKey, setDocKey] = useState('');
+  const [transcriptChanged, setTranscriptChanged] = useState(false);
+  const [staleDismissed, setStaleDismissed] = useState(false);
+  const docTemplate = templates.shownTemplate ?? templates.selectedTemplate;
+  const checkTranscriptChanged = async () => {
+    const id = meeting.id;
+    const text = await summaryGeneration.currentTranscriptText();
+    if (!text) return;
+    try {
+      const shown = await invoke<{ templateId: string | null; transcriptChanged: boolean }>('api_shown_document', { meetingId: id, text });
+      if (id === meeting.id) setTranscriptChanged(shown.transcriptChanged);
+    } catch {
+      // the note is a convenience
+    }
+  };
+  useEffect(() => {
+    setTranscriptChanged(false);
+    setStaleDismissed(false);
+  }, [meeting.id]);
+  useEffect(() => {
+    if (step === 'document' && hasProtocol && !isGenerating) void checkTranscriptChanged();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, hasProtocol, isGenerating, meeting.id]);
+  // A document just made: it is the one shown now, and kept under its template
+  const lastStatusRef = useRef(summaryGeneration.summaryStatus);
+  useEffect(() => {
+    const was = lastStatusRef.current;
+    lastStatusRef.current = summaryGeneration.summaryStatus;
+    if (summaryGeneration.summaryStatus === 'completed' && was !== 'completed') {
+      void templates.refreshVariants();
+      setTranscriptChanged(false);
+      setStaleDismissed(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summaryGeneration.summaryStatus]);
+
+  /** Unsaved edits stay with the document they were made in */
+  const saveEditsFirst = async () => {
+    if (meetingData.isSummaryDirty) await meetingData.saveAllChanges();
+  };
+
+  const showDocument = async (templateId: string) => {
+    try {
+      await saveEditsFirst();
+      const ok = await invoke<boolean>('api_show_document_variant', { meetingId: meeting.id, templateId });
+      if (!ok) {
+        toast.info('Цей документ ще не створено');
+        return;
+      }
+      const existing = await invoke<SummaryProcessResponse>('api_get_summary', { meetingId: meeting.id });
+      meetingData.setAiSummary(parseSummaryContent(existing.data));
+      setDocKey(`${templateId}:${Date.now()}`);
+      templates.setSelectedTemplate(templateId);
+      await templates.refreshVariants();
+      setStaleDismissed(false);
+      void checkTranscriptChanged();
+    } catch (error) {
+      console.error('Failed to show the document:', error);
+      toast.error('Не вдалося відкрити документ');
+    }
+  };
+
+  const createWithTemplate = async (templateId: string) => {
+    if (isGenerating) return;
+    // A click in the menu costs minutes of the model: asked once
+    const template = templates.templates.find((t) => t.id === templateId);
+    if (hasProtocol && template && !isTranscriptOnly(template)) {
+      const ok = await confirmNative(
+        `Створити документ за шаблоном «${template.name}»?`,
+        `Це займе ${estimateLabel(template, durationSeconds ? durationSeconds / 60 : null)}. Поточний документ збережеться, до нього можна повернутися в цьому ж меню.`,
+        'Створити',
+      );
+      if (!ok) return;
+    }
+    await saveEditsFirst();
+    // A document made before templates were kept: keep it under the
+    // template it was most likely made with, so it is not lost
+    if (hasProtocol && !templates.shownTemplate) {
+      await invoke('api_keep_shown_document', { meetingId: meeting.id, templateId: templates.selectedTemplate }).catch(() => {});
+    }
+    templates.setSelectedTemplate(templateId);
+    if (hasProtocol) await summaryGeneration.handleRegenerateSummary(templateId, 'template-menu');
+    else await summaryGeneration.handleGenerateSummary('', templateId, 'template-menu');
+  };
+
   const handleToggleApproved = async () => {
     const next: ProtocolStatus = status === 'approved' ? 'draft' : 'approved';
     setIsSavingStatus(true);
@@ -281,9 +373,9 @@ export default function PageContent({
     }
   };
 
-  const handleRegenerate = () => {
-    if (hasProtocol) void summaryGeneration.handleRegenerateSummary();
-    else void summaryGeneration.handleGenerateSummary('');
+  const handleRegenerate = (trigger: string) => {
+    if (hasProtocol) void summaryGeneration.handleRegenerateSummary(docTemplate, trigger);
+    else void summaryGeneration.handleGenerateSummary('', templates.selectedTemplate, trigger);
   };
 
   // Points of the document whose source was not found (⟨?⟩): counted in the
@@ -630,7 +722,7 @@ export default function PageContent({
     if (!speakerRecognition.finishedAt || meetingData.aiSummary || summaryGeneration.summaryStatus !== 'idle') return;
     invoke<boolean>('get_auto_document')
       .then((enabled) => {
-        if (enabled) void summaryGeneration.handleGenerateSummary('');
+        if (enabled) void summaryGeneration.handleGenerateSummary('', undefined, 'auto-after-speakers');
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -652,7 +744,7 @@ export default function PageContent({
     autoGenerationStartedMeetingIdRef.current = meeting.id;
     console.log(`🤖 Auto-generating summary with ${modelConfig.provider}/${modelConfig.model}...`);
     onAutoGenerateComplete?.();
-    void summaryGeneration.handleGenerateSummary('');
+    void summaryGeneration.handleGenerateSummary('', undefined, 'auto-after-recording');
   }, [
     shouldAutoGenerate,
     speakerRecognition.running,
@@ -669,6 +761,19 @@ export default function PageContent({
   // Under the document's toolbar, so the toolbar keeps its place on both pages
   const docBanner = (
     <>
+      {hasProtocol && transcriptChanged && !staleDismissed && !isGenerating && (
+        <div className="doc-banner doc-banner-info" role="status">
+          <span className="flex-1 min-w-0">Стенограму виправлено після створення документа.</span>
+          <button type="button" className="doc-banner-action" onClick={() => handleRegenerate('stale-banner')}>
+            Оновити документ
+          </button>
+          <button type="button" className="doc-banner-close" aria-label="Закрити" title="Закрити" onClick={() => setStaleDismissed(true)}>
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+              <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" />
+            </svg>
+          </button>
+        </div>
+      )}
       {reviewProgress && reviewProgress.total > 0 && (
             reviewProgress.reviewed >= reviewProgress.total ? (
               (noSource > 0 || numbers.count > 0) && (
@@ -712,10 +817,7 @@ export default function PageContent({
         isGenerating={isGenerating}
         isExporting={isExporting}
         isSavingStatus={isSavingStatus}
-        onRegenerate={handleRegenerate}
-        meetingTypes={templates.templates}
-        meetingType={templates.selectedTemplate}
-        onMeetingTypeChange={templates.setSelectedTemplate}
+        onRegenerate={() => handleRegenerate('top-bar')}
         onToggleApproved={handleToggleApproved}
         onExportDocx={handleExportDocx}
         onExportPdf={handleExportPdf}
@@ -813,25 +915,53 @@ export default function PageContent({
               modelConfig={modelConfig}
               setModelConfig={setModelConfig}
               onSaveModelConfig={handleSaveModelConfig}
-              onGenerateSummary={summaryGeneration.handleGenerateSummary}
+              onGenerateSummary={(prompt) => summaryGeneration.handleGenerateSummary(prompt, undefined, 'empty-panel')}
               onStopGeneration={summaryGeneration.handleStopGeneration}
               customPrompt=""
               onSaveSummary={meetingData.handleSaveSummary}
               onSummaryChange={meetingData.handleSummaryChange}
               onDirtyChange={meetingData.setIsSummaryDirty}
               summaryError={summaryGeneration.summaryError}
-              onRegenerateSummary={summaryGeneration.handleRegenerateSummary}
+              onRegenerateSummary={() => summaryGeneration.handleRegenerateSummary(undefined, 'legacy-view')}
               getSummaryStatusMessage={summaryGeneration.getSummaryStatusMessage}
               isModelConfigLoading={isModelConfigLoading}
               onOpenModelSettings={handleRegisterModalOpen}
               onTextClick={handleProtocolClick}
               banner={docBanner}
+              docKey={docKey}
+              templateSlot={
+                <TemplateMenu
+                  templates={templates.templates}
+                  variants={templates.variants}
+                  shown={templates.shownTemplate}
+                  fallback={templates.selectedTemplate}
+                  minutes={durationSeconds ? durationSeconds / 60 : null}
+                  disabled={isGenerating}
+                  onShow={(id) => void showDocument(id)}
+                  onCreate={(id) => void createWithTemplate(id)}
+                />
+              }
+              emptyState={
+                meetingData.transcripts.length > 0 ? (
+                  <TemplatePicker
+                    templates={templates.templates}
+                    selected={templates.selectedTemplate}
+                    onSelect={templates.setSelectedTemplate}
+                    onCreate={(how) => void summaryGeneration.handleGenerateSummary('', templates.selectedTemplate, how)}
+                    minutes={durationSeconds ? durationSeconds / 60 : null}
+                    unchecked={reviewProgress ? Math.max(0, reviewProgress.total - reviewProgress.reviewed) : 0}
+                    onCheck={() => setStep('transcript')}
+                    error={summaryGeneration.summaryError}
+                    hasModel={modelConfig.provider !== null && modelConfig.model !== null}
+                  />
+                ) : undefined
+              }
               toolbarRight={
                 <DocumentActions
                   hasProtocol={hasProtocol}
                   isGenerating={isGenerating}
                   isExporting={isExporting}
-                  onRegenerate={handleRegenerate}
+                  onRegenerate={() => handleRegenerate('document-actions')}
                   onExportDocx={handleExportDocx}
                   onExportPdf={handleExportPdf}
                   onCopy={() => void copyOperations.handleCopySummary()}

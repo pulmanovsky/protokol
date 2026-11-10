@@ -47,8 +47,9 @@ impl SummaryProcessesRepository {
             return Ok(false);
         }
         let now = Utc::now();
+        let result_json = result_json.unwrap();
         let update = sqlx::query("UPDATE summary_processes SET result = ?, updated_at = ? WHERE meeting_id = ?")
-            .bind(&result_json.unwrap())
+            .bind(&result_json)
             .bind(now)
             .bind(meeting_id)
             .execute(&mut *transaction)
@@ -57,6 +58,17 @@ impl SummaryProcessesRepository {
             transaction.rollback().await?;
             return Ok(false);
         }
+        // The edit stays with the template's document (see `document_variant`)
+        sqlx::query(
+            "UPDATE document_variants SET result = ?, updated_at = ?
+             WHERE meeting_id = ? AND template_id = (SELECT template_id FROM summary_processes WHERE meeting_id = ?)",
+        )
+        .bind(&result_json)
+        .bind(now.to_rfc3339())
+        .bind(meeting_id)
+        .bind(meeting_id)
+        .execute(&mut *transaction)
+        .await?;
 
         sqlx::query("UPDATE meetings SET updated_at = ? WHERE id = ?")
             .bind(now)

@@ -14,6 +14,19 @@ pub struct TemplateInfo {
 
     /// Brief description of the template's purpose
     pub description: String,
+
+    /// What the document has, in order (as `MeetingSpec::blocks`); a
+    /// template without a meeting spec is the transcript only («Стенограма»)
+    #[serde(default)]
+    pub blocks: Vec<String>,
+
+    /// Each speaker by the template's fields («Зроблено», «План»…)
+    #[serde(default, rename = "byFields")]
+    pub by_fields: bool,
+
+    /// Built in (read-only; a change is saved as a copy)
+    #[serde(default, rename = "builtIn")]
+    pub built_in: bool,
 }
 
 /// Detailed template structure for preview/debugging
@@ -49,10 +62,14 @@ pub async fn api_list_templates<R: Runtime>(
 
     let template_infos: Vec<TemplateInfo> = templates
         .into_iter()
-        .map(|(id, name, description)| TemplateInfo {
-            id,
-            name,
-            description,
+        .map(|(id, name, description)| {
+            let spec = templates::get_template(&id).ok().and_then(|t| t.meeting);
+            let (blocks, by_fields) = match spec {
+                Some(spec) if spec.classic => (spec.blocks.clone(), true),
+                Some(spec) => (spec.speaker_document_blocks(), false),
+                None => (vec!["Стенограма".to_string()], false),
+            };
+            TemplateInfo { built_in: !id.starts_with("custom:"), id, name, description, blocks, by_fields }
         })
         .collect();
 
@@ -213,4 +230,91 @@ pub async fn api_forget_learned_meeting(state: tauri::State<'_, crate::state::Ap
 #[tauri::command]
 pub async fn api_voice_profile_count(state: tauri::State<'_, crate::state::AppState>) -> Result<i64, String> {
     sqlx::query_scalar("SELECT COUNT(*) FROM voice_profiles").fetch_one(state.db_manager.pool()).await.map_err(|e| e.to_string())
+}
+
+/// «Зберегти у файл»: the template as a .json file that «Імпорт із файлу»
+/// reads on another Mac. Returns the path, None when cancelled.
+#[tauri::command]
+pub async fn api_export_meeting_type<R: Runtime>(app: tauri::AppHandle<R>, id: String) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let template = templates::get_template(&id)?;
+    let json = templates::editor::export(&id)?;
+    // The same shape as an organisation's pack: one type, nothing else
+    let stem: String = template.name.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
+    let pack = format!("{{\"meeting_types\":[[{},{}]]}}", serde_json::to_string(stem.trim()).map_err(|e| e.to_string())?, json);
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog().file().add_filter("Шаблон", &["json"]).set_file_name(format!("{}.json", stem.trim())).blocking_save_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(path) = picked.and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    std::fs::write(&path, pack).map_err(|e| format!("Файл не збережено: {e}"))?;
+    Ok(Some(path.to_string_lossy().to_string()))
+}
+
+/// The documents kept for a meeting, one per template it was made with
+#[tauri::command]
+pub async fn api_document_variants(
+    state: tauri::State<'_, crate::state::AppState>,
+    meeting_id: String,
+) -> Result<Vec<crate::database::repositories::document_variant::DocumentVariant>, String> {
+    crate::database::repositories::document_variant::DocumentVariantsRepository::list(state.db_manager.pool(), &meeting_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// A document made before 0.3.8: kept under `template_id` before another template replaces it
+#[tauri::command]
+pub async fn api_keep_shown_document(
+    state: tauri::State<'_, crate::state::AppState>,
+    meeting_id: String,
+    template_id: String,
+) -> Result<bool, String> {
+    log::info!("api_keep_shown_document: meeting {}, template {}", meeting_id, template_id);
+    crate::database::repositories::document_variant::DocumentVariantsRepository::keep_shown(state.db_manager.pool(), &meeting_id, &template_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Shows the document kept under `template_id`; false when there is none
+#[tauri::command]
+pub async fn api_show_document_variant(
+    state: tauri::State<'_, crate::state::AppState>,
+    meeting_id: String,
+    template_id: String,
+) -> Result<bool, String> {
+    log::info!("api_show_document_variant: meeting {}, template {}", meeting_id, template_id);
+    crate::database::repositories::document_variant::DocumentVariantsRepository::show(state.db_manager.pool(), &meeting_id, &template_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShownDocument {
+    /// The template of the document shown (None for documents made before 0.3.8)
+    pub template_id: Option<String>,
+    /// The transcript changed since the document was made
+    pub transcript_changed: bool,
+}
+
+/// Which template the document shown was made with, and whether the
+/// transcript (`text`, as it would be sent now) changed since
+#[tauri::command]
+pub async fn api_shown_document(
+    state: tauri::State<'_, crate::state::AppState>,
+    meeting_id: String,
+    text: Option<String>,
+) -> Result<ShownDocument, String> {
+    let (template_id, transcript_changed) =
+        crate::database::repositories::document_variant::DocumentVariantsRepository::shown(state.db_manager.pool(), &meeting_id, text.as_deref())
+            .await
+            .map_err(|e| e.to_string())?;
+    log::info!(
+        "api_shown_document: meeting {}, template {}, transcript changed: {}",
+        meeting_id,
+        template_id.as_deref().unwrap_or("-"),
+        transcript_changed
+    );
+    Ok(ShownDocument { template_id, transcript_changed })
 }

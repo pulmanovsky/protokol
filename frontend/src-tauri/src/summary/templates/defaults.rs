@@ -23,20 +23,30 @@ pub const DAILY_REPORTS_UK: &str = include_str!("../../../templates/daily_report
 pub const DAILY_REPORTS_FIELDS_ID: &str = "daily_reports_fields_uk";
 pub const DAILY_REPORTS_FIELDS_UK: &str = include_str!("../../../templates/daily_reports_fields_uk.json");
 
+/// «Рішення та завдання»
+pub const DECISIONS_TASKS_ID: &str = "decisions_tasks_uk";
+pub const DECISIONS_TASKS_UK: &str = include_str!("../../../templates/decisions_tasks_uk.json");
+
 /// «Контрольна нарада»
 pub const CONTROL_MEETING_ID: &str = "control_meeting_uk";
 pub const CONTROL_MEETING_UK: &str = include_str!("../../../templates/control_meeting_uk.json");
 
-/// Registry of all built-in templates (meeting types), in the order offered
+/// Registry of all built-in templates, in the order offered
 pub fn get_builtin_templates() -> Vec<(&'static str, &'static str)> {
     vec![
-        (MEETING_SUMMARY_ID, MEETING_SUMMARY_UK),
-        (DAILY_REPORTS_ID, DAILY_REPORTS_UK),
-        (DAILY_REPORTS_FIELDS_ID, DAILY_REPORTS_FIELDS_UK),
-        (CONTROL_MEETING_ID, CONTROL_MEETING_UK),
         (MEETING_MATERIALS_ID, MEETING_MATERIALS_UK),
+        (DECISIONS_TASKS_ID, DECISIONS_TASKS_UK),
+        (DAILY_REPORTS_FIELDS_ID, DAILY_REPORTS_FIELDS_UK),
+        (MEETING_SUMMARY_ID, MEETING_SUMMARY_UK),
+        (CONTROL_MEETING_ID, CONTROL_MEETING_UK),
+        (DAILY_REPORTS_ID, DAILY_REPORTS_UK),
     ]
 }
+
+/// Built-in templates that still open (documents made with them, the
+/// type «Контрольна нарада» checks) but are no longer offered: «Щоденна
+/// нарада (доповіді)» writes the same document as «Підсумки доповідачів»
+pub const NOT_OFFERED: &[&str] = &[DAILY_REPORTS_ID];
 
 /// Get a built-in template by identifier
 pub fn get_builtin_template(id: &str) -> Option<&'static str> {

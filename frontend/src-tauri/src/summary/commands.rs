@@ -496,14 +496,18 @@ pub async fn api_process_transcript<R: Runtime>(
     template_id: Option<String>,
     summary_language: Option<String>,
     _auth_token: Option<String>,
+    trigger: Option<String>,
 ) -> Result<ProcessTranscriptResponse, String> {
     use uuid::Uuid;
 
     let m_id = meeting_id.unwrap_or_else(|| format!("meeting-{}", Uuid::new_v4()));
+    // Which control started it, so a document no one asked for can be traced
     log_info!(
-        "api_process_transcript (native) called for meeting_id: {}, model: {}",
+        "api_process_transcript (native) called for meeting_id: {}, model: {}, template: {}, trigger: {}",
         &m_id,
-        &model
+        &model,
+        template_id.as_deref().unwrap_or("-"),
+        trigger.as_deref().unwrap_or("-")
     );
 
     let pool = state.db_manager.pool().clone();

@@ -321,11 +321,17 @@ export function useSummaryGeneration({
     transcriptTexts,
     customPrompt = '',
     isRegeneration = false,
+    templateId,
+    trigger,
   }: {
     transcriptText: string;
     transcriptTexts?: string[];
     customPrompt?: string;
     isRegeneration?: boolean;
+    /** Another template than the one selected (chosen and started in one click) */
+    templateId?: string;
+    /** Which control started it, written to the log */
+    trigger?: string;
   }) => {
     const previousAttempt = trackedAttemptRef.current;
     if (previousAttempt && !previousAttempt.finished) {
@@ -378,8 +384,9 @@ export function useSummaryGeneration({
         chunkSize: 40000,
         overlap: 1000,
         customPrompt,
-        templateId: selectedTemplate,
+        templateId: templateId ?? selectedTemplate,
         summaryLanguage,
+        trigger: trigger ?? null,
       });
       const processId = result.process_id;
       if (!mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
@@ -466,7 +473,25 @@ export function useSummaryGeneration({
     toast.error(message);
   }, []);
 
-  const handleGenerateSummary = useCallback(async (customPrompt: string = '') => {
+  // One document at a time: a second start while one is being made (a
+  // double click, a click during the transcript's fetch) is refused
+  const statusRef = useRef(summaryStatus);
+  statusRef.current = summaryStatus;
+  const startingRef = useRef(false);
+  const startOnce = useCallback(async (start: () => Promise<void>) => {
+    if (startingRef.current || ['processing', 'summarizing', 'regenerating'].includes(statusRef.current)) {
+      toast.info('Документ уже створюється');
+      return;
+    }
+    startingRef.current = true;
+    try {
+      await start();
+    } finally {
+      startingRef.current = false;
+    }
+  }, []);
+
+  const handleGenerateSummary = useCallback((customPrompt: string = '', templateId?: string, trigger?: string) => startOnce(async () => {
     if (isModelConfigLoading) {
       toast.info('Завантаження налаштувань моделі…');
       return;
@@ -512,8 +537,10 @@ export function useSummaryGeneration({
     await processSummary({
       ...buildSummaryTranscriptPayload(allTranscripts),
       customPrompt,
+      templateId,
+      trigger,
     });
-  }, [
+  }), [
     buildSummaryTranscriptPayload,
     fetchAllTranscripts,
     isModelConfigLoading,
@@ -522,10 +549,11 @@ export function useSummaryGeneration({
     onOpenModelSettings,
     processSummary,
     showPreflightError,
+    startOnce,
   ]);
 
   // Public API: Regenerate summary from the current saved transcript
-  const handleRegenerateSummary = useCallback(async () => {
+  const handleRegenerateSummary = useCallback((templateId?: string, trigger?: string) => startOnce(async () => {
     const allTranscripts = await fetchAllTranscripts(meeting.id);
 
     if (!allTranscripts.length) {
@@ -536,9 +564,23 @@ export function useSummaryGeneration({
 
     await processSummary({
       ...buildSummaryTranscriptPayload(allTranscripts),
-      isRegeneration: true
+      isRegeneration: true,
+      templateId,
+      trigger,
     });
-  }, [meeting.id, fetchAllTranscripts, buildSummaryTranscriptPayload, processSummary]);
+  }), [meeting.id, fetchAllTranscripts, buildSummaryTranscriptPayload, processSummary, startOnce]);
+
+  /** The transcript as it would be sent for a document now (to see whether it changed since) */
+  const currentTranscriptText = useCallback(async (): Promise<string | null> => {
+    try {
+      const firstPage = await invokeTauri('api_get_meeting_transcripts', { meetingId: meeting.id, limit: 1, offset: 0 }) as { total_count: number };
+      if (!firstPage.total_count) return null;
+      const all = await invokeTauri('api_get_meeting_transcripts', { meetingId: meeting.id, limit: firstPage.total_count, offset: 0 }) as { transcripts: Transcript[] };
+      return buildSummaryTranscriptPayload(all.transcripts).transcriptText;
+    } catch {
+      return null;
+    }
+  }, [meeting.id, buildSummaryTranscriptPayload]);
 
   // Public API: Stop ongoing summary generation
   const handleStopGeneration = useCallback(async () => {
@@ -601,5 +643,6 @@ export function useSummaryGeneration({
     handleRegenerateSummary,
     handleStopGeneration,
     getSummaryStatusMessage,
+    currentTranscriptText,
   };
 }

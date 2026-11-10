@@ -104,24 +104,34 @@ are split at the quietest point (`audio/common.rs`). Pieces shorter than
   `speakers-done`) and can be stopped at any point; the transcript stays as
   it was.
 
-### 1.6 Meeting types (`summary/templates/`)
+### 1.6 Document templates (`summary/templates/`)
 
-A meeting type is JSON: a name, a description and a `meeting` block:
+A document template is JSON: a name, a description and a `meeting` block:
 
 | Field | Meaning |
 | --- | --- |
-| `report_fields` | What to note for each speaker («Зроблено», «План…», «Проблеми»…); empty = 1–2 sentences |
+| `blocks` | What the document has, in order: «Контроль», «Хід наради», «Рішення», «Завдання», «Відкриті питання», «Загальний підсумок», «Не доповідали», «Стенограма» |
+| `ordered` | The document has exactly `blocks`, in that order. Templates saved before 0.3.8 lack it and write the speakers' blocks and the overall summary whatever `blocks` says |
+| `classic` | Each speaker by `report_fields` («Зроблено», «План…», «Проблеми»…) instead of short points |
+| `detailed` | «Докладніше»: more and longer points per speaker, a longer overall summary |
+| `wishes` | «Побажання до тексту»: the secretary's own words, added to the model's instructions |
 | `parts` | Optional parts in order: `title`, `cues` (phrases that open the part), `role` (one or several roles from «Спікери», comma-separated) |
-| `blocks` | Document sections in order: «Контроль», «Хід наради», «Рішення», «Завдання», «Відкриті питання», «Не доповідали», «Стенограма» |
-| `title_hints`, `hours` | Words in the title and start hours, to choose the type automatically |
-| `controls` | For a control meeting: which earlier meeting's tasks to check |
+| `title_hints`, `hours` | Words in the title and start hours, to suggest the template |
+| `controls` | For «Контроль»: which earlier meeting's tasks to check |
 
-Built in (`frontend/src-tauri/templates/`): «Загальна зустріч» (default),
-«Щоденна нарада (доповіді)», «Контрольна нарада», «Стенограма». They are
-generic; an organisation's own structure is a user type made in
-«Налаштування → Типи записів» (`summary/templates/editor.rs`), stored in
-`<app data>/meeting-types/*.json`. On an equal auto-choice score the user's
-own type wins.
+Built in (`frontend/src-tauri/templates/`): «Підсумки доповідачів» (main),
+«Рішення та завдання», «Доповіді за полями», «Стенограма», «Контрольна
+нарада». «Щоденна нарада (доповіді)» still opens but is no longer offered.
+An organisation's own structure is a user template made in «Налаштування →
+Шаблони документа» (`summary/templates/editor.rs`), stored in
+`<app data>/meeting-types/*.json`. On an equal suggestion score the user's
+own template wins.
+
+The template is chosen in the «Документ» tab. Each document made for a
+meeting is kept under its template (`document_variants`, with a fingerprint
+of the transcript it was made from), so switching templates shows the earlier
+document again, the secretary's edits included; the tab says when the
+transcript changed since the document shown was made.
 
 An organisation can hand out its types, terms and wording as one pack file
 (`summary/pack.rs`). «Імпорт шаблону» writes the types to `meeting-types/`,
@@ -154,7 +164,7 @@ organisation-specific ships with the app.
 
 - Головна, Записи (list), the meeting page (document on the left,
   «Стенограма» on the right with the processing banner, the «Спікери»
-  dialog and playback), Календар, Словник, Налаштування (incl. «Типи записів»
+  dialog and playback), Календар, Словник, Налаштування (incl. «Шаблони документа»
   with «Імпорт шаблону»).
 - The transcript list is virtualised; a click on a line's time highlights
   that line and offers playback from its exact start (`lib/timeline.ts`).
@@ -265,7 +275,7 @@ Quality, measured on copies of real meetings:
 - Word times are approximate; sentence snapping covers most cases. Exact
   alignment (Whisper DTW) would need flash attention off and is not done.
 - Overlapping speech goes to one voice.
-- Parts of a meeting type need roles set in «Спікери» or cue phrases said in
+- Parts of a document template need roles set in «Спікери» or cue phrases said in
   the meeting.
 - Tasks still miss about half of what people promise in long reports.
 - macOS first; Windows and Linux builds are not tested in this fork.

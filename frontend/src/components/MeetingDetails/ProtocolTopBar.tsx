@@ -21,11 +21,6 @@ interface ProtocolTopBarProps {
   onToggleApproved: () => void;
   onExportDocx: () => void;
   onExportPdf?: () => void;
-  /** The protocol model is a cloud service */
-  /** Meeting types to choose from, and the chosen one */
-  meetingTypes?: { id: string; name: string; description: string }[];
-  meetingType?: string;
-  onMeetingTypeChange?: (id: string) => void;
   /** Two steps: check the transcript, then the document */
   step: MeetingStep;
   onStep: (step: MeetingStep) => void;
@@ -104,9 +99,6 @@ export function ProtocolTopBar({
   onToggleApproved,
   onExportDocx,
   onExportPdf,
-  meetingTypes = [],
-  meetingType,
-  onMeetingTypeChange,
   step,
   onStep,
   people,
@@ -121,28 +113,7 @@ export function ProtocolTopBar({
           {title}
         </span>
         <div className="flex min-w-0 items-center gap-1.5 text-[12px] text-[color:var(--muted-text)]">
-          {meetingTypes.length > 1 && onMeetingTypeChange ? (
-            // The chosen type's own width (a native select is as wide as its
-            // longest option); the select itself lies over it, unseen
-            <label className="relative inline-flex min-w-[56px] max-w-[200px] shrink items-center gap-0.5 font-semibold hover:text-gray-900" title={meetingTypes.find((t) => t.id === meetingType)?.description ?? 'Тип запису'}>
-              <span className="truncate">{meetingTypes.find((t) => t.id === meetingType)?.name ?? 'Тип запису'}</span>
-              <ChevronDown className="h-3 w-3 flex-none" aria-hidden="true" />
-              <select
-                aria-label="Тип запису"
-                className="absolute inset-0 cursor-pointer opacity-0"
-                value={meetingType}
-                onChange={(e) => onMeetingTypeChange(e.target.value)}
-                disabled={isGenerating}
-              >
-                {meetingTypes.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          {meta && <span className="flex-none whitespace-nowrap">{meetingTypes.length > 1 && onMeetingTypeChange ? `· ${meta}` : meta}</span>}
+          {meta && <span className="flex-none whitespace-nowrap">{meta}</span>}
           {approved && <span className="pill-approved inline-flex h-[18px] flex-none items-center rounded-full px-2 text-[11.5px] font-semibold">Затверджено</span>}
         </div>
       </div>
@@ -162,10 +133,7 @@ export function ProtocolTopBar({
           type="button"
           className="accent-button protocol-main h-9 gap-1.5 whitespace-nowrap text-[13px] font-semibold"
           title="Перейти до документа"
-          onClick={() => {
-            onStep('document');
-            if (!hasProtocol && !isGenerating) onRegenerate();
-          }}
+          onClick={() => onStep('document')}
         >
           Далі: документ <ArrowRight className="h-4 w-4" />
         </button>

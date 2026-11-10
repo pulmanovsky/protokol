@@ -12,7 +12,7 @@
 
 use std::collections::HashSet;
 
-use super::templates::{MeetingPart, MeetingSpec};
+use super::templates::{MeetingPart, MeetingSpec, OVERALL_BLOCK};
 
 /// One transcript line "[MM:SS] text"
 #[derive(Debug, Clone, PartialEq)]
@@ -994,6 +994,12 @@ pub(crate) struct DocInput<'a> {
     pub decisions: &'a [Item],
     pub tasks: &'a [Item],
     pub questions: &'a [Item],
+    /// One block per person: «Хід наради» shows these when there are any
+    pub speaker_blocks: &'a [SpeakerBlock],
+    /// «Загальний підсумок»: «- …» points
+    pub overall: &'a str,
+    /// Shown under the header (e.g. whose words stayed as said, and why)
+    pub note: Option<&'a str>,
 }
 
 /// «Загальна зустріч» with the default blocks (kept for tests and callers
@@ -1022,6 +1028,9 @@ pub(crate) fn build_document(
         decisions,
         tasks,
         questions,
+        speaker_blocks: &[],
+        overall: "",
+        note: None,
     })
 }
 
@@ -1100,6 +1109,16 @@ pub(crate) fn lines_for_model(lines: &[(u32, String)], max_tokens: usize) -> Vec
     }
     parts.retain(|p| !p.trim().is_empty());
     parts
+}
+
+/// How many points the overall summary has: (at least, at most)
+pub(crate) fn overall_points(detailed: bool) -> (usize, usize) {
+    if detailed { (8, 15) } else { (5, 10) }
+}
+
+/// «Докладніше»: half as many points again (twelve at most)
+pub(crate) fn points_for_detailed(words: usize) -> usize {
+    (points_for(words) * 3).div_ceil(2).min(12)
 }
 
 /// How many points a person's block may have: one for a short remark, a
@@ -1226,27 +1245,29 @@ pub(crate) fn keep_numbers(points: &str, lines: &[(u32, String)]) -> (String, Nu
     (out.join("\n"), kept)
 }
 
-pub(crate) fn speaker_block_prompt(speaker: &str, said: &str, points: usize) -> String {
+pub(crate) fn speaker_block_prompt(speaker: &str, said: &str, points: usize, detailed: bool) -> String {
+    let (kind, words) = if detailed { ("докладний", 25) } else { ("стислий", 15) };
     format!(
         r#"Нижче все, що сказав на нараді один учасник ({speaker}): рядки стенограми усного мовлення з мітками часу.
 <said>
 {said}
 </said>
 
-Склади стислий виклад сказаного: головне з доповіді, проблеми, пропозиції, завдання, які дано або взято (кому і який термін, лише якщо це названо). Дрібне об'єднуй, повторів не пиши.
-Не більше {points} пунктів, кожен не довший за 15 слів, у форматі «- текст [ММ:СС]», де мітка часу — того рядка, де це прозвучало. Пункти в тому самому порядку.
+Склади {kind} виклад сказаного: головне з доповіді, проблеми, пропозиції, завдання, які дано або взято (кому і який термін, лише якщо це названо). Дрібне об'єднуй, повторів не пиши.
+Не більше {points} пунктів, кожен не довший за {words} слів, у форматі «- текст [ММ:СС]», де мітка часу — того рядка, де це прозвучало. Пункти в тому самому порядку.
 Числа пиши цифрами; дати, імена, псевдоніми й назви дослівно. Нічого не додавай від себе й не роби висновків. Не бери привітань, подяк, перекличок і реплік про звук. Не пиши вступу, заголовків чи імені доповідача. Виведи лише пункти українською."#
     )
 }
 
-pub(crate) fn overall_summary_prompt(blocks: &str) -> String {
+pub(crate) fn overall_summary_prompt(blocks: &str, detailed: bool) -> String {
+    let (least, most) = overall_points(detailed);
     format!(
         r#"Нижче виступи учасників наради, по порядку.
 <meeting>
 {blocks}
 </meeting>
 
-Напиши загальний підсумок наради: від 5 до 10 коротких пунктів, кожен з нового рядка, починаючи з «- ». Спочатку головні теми, потім рішення, далі завдання (хто відповідальний і термін, лише якщо це названо).
+Напиши загальний підсумок наради: від {least} до {most} коротких пунктів, кожен з нового рядка, починаючи з «- ». Спочатку головні теми, потім рішення, далі завдання (хто відповідальний і термін, лише якщо це названо).
 Лише те, що є в тексті: нічого не вигадуй. Числа, дати й імена дослівно. Виведи лише пункти українською."#
     )
 }
@@ -1294,34 +1315,27 @@ fn minutes(seconds: u32) -> String {
 
 /// The document made of speakers' blocks: header, one block per person, the
 /// overall summary. Blocks read as «Хід наради» so that «Затвердити» learns from them.
-pub(crate) fn speaker_blocks_markdown(title: &str, date: Option<&str>, lines: &[Line], reports: &[Report], blocks: &[SpeakerBlock], overall: &str) -> String {
-    let duration_min = lines.last().map(|l| l.seconds.div_ceil(60)).unwrap_or(0);
-    let mut md = format!("# {title}\n\n");
-    let mut header = Vec::new();
-    if let Some(date) = date {
-        header.push(format!("**Дата:** {date}"));
-    }
-    if duration_min > 0 {
-        header.push(format!("**Тривалість:** {duration_min} хв"));
-    }
-    let participants = participants_named(reports);
-    if !participants.is_empty() {
-        header.push(format!("**Учасники (названі в записі):** {}", participants.join(", ")));
-    }
-    if !header.is_empty() {
-        md.push_str(&header.join("  \n"));
-        md.push_str("\n\n");
-    }
-    md.push_str("## Хід наради\n\n");
-    for b in blocks {
-        md.push_str(&format!("**ВИСТУПИЛИ:** {} [{}] · {}\n\n{}\n\n", b.speaker, mmss(b.seconds), minutes(b.spoken), b.text.trim()));
-    }
-    if !overall.trim().is_empty() {
-        md.push_str("## Загальний підсумок\n\n");
-        md.push_str(overall.trim());
-        md.push('\n');
-    }
-    md
+pub(crate) fn speaker_blocks_markdown(title: &str, date: Option<&str>, lines: &[Line], reports: &[Report], blocks: &[SpeakerBlock], overall: &str, note: Option<&str>) -> String {
+    let spec = MeetingSpec::default();
+    let spec = MeetingSpec { blocks: spec.speaker_document_blocks(), ..spec };
+    build_meeting_document(&DocInput {
+        title,
+        date,
+        lines,
+        reports,
+        spec: &spec,
+        summaries: &Default::default(),
+        fields: &Default::default(),
+        part_starts: &[],
+        absent: &[],
+        control: &[],
+        decisions: &[],
+        tasks: &[],
+        questions: &[],
+        speaker_blocks: blocks,
+        overall,
+        note,
+    })
 }
 
 /// A capital after a full stop inside recognised text, except after an
@@ -1486,9 +1500,24 @@ pub(crate) fn build_meeting_document(d: &DocInput) -> String {
         md.push_str(&header.join("  \n"));
         md.push_str("\n\n");
     }
+    if let Some(note) = d.note {
+        md.push_str(note);
+        md.push_str("\n\n");
+    }
     for block in &d.spec.blocks {
         match block.as_str() {
+            "Хід наради" if !d.speaker_blocks.is_empty() => {
+                md.push_str("## Хід наради\n\n");
+                for b in d.speaker_blocks {
+                    md.push_str(&format!("**ВИСТУПИЛИ:** {} [{}] · {}\n\n{}\n\n", b.speaker, mmss(b.seconds), minutes(b.spoken), b.text.trim()));
+                }
+            }
             "Хід наради" => course_block(&mut md, d),
+            OVERALL_BLOCK if !d.overall.trim().is_empty() => {
+                md.push_str(&format!("## {OVERALL_BLOCK}\n\n"));
+                md.push_str(d.overall.trim());
+                md.push_str("\n\n");
+            }
             "Рішення" => items_block(&mut md, "Рішення", d.decisions),
             "Відкриті питання" => items_block(&mut md, "Відкриті питання", d.questions),
             "Завдання" => tasks_block(&mut md, d.tasks),
@@ -2130,7 +2159,7 @@ mod tests {
         assert!(b[0].spoken > 0);
         b[0].text = "- Привітання [00:10]".into();
         b[1].text = "- Склад готовий [00:20]".into();
-        let md = speaker_blocks_markdown("Нарада", Some("08.11.2026"), &lines, &reports, &b, "- Підсумок");
+        let md = speaker_blocks_markdown("Нарада", Some("08.11.2026"), &lines, &reports, &b, "- Підсумок", None);
         assert!(md.find("**ВИСТУПИЛИ:** Сокіл [00:10]").unwrap() < md.find("**ВИСТУПИЛИ:** Спікер 2 [00:20]").unwrap());
         assert!(md.find("Спікер 2").unwrap() < md.find("## Загальний підсумок").unwrap());
         // «Затвердити» reads the same document
@@ -2599,6 +2628,9 @@ mod tests {
             decisions: &[],
             tasks: &[],
             questions: &[],
+            speaker_blocks: &[],
+            overall: "",
+            note: None,
         });
         assert_eq!(md.matches("**ВИСТУПИЛИ:**").count(), 2, "{md}");
         assert!(md.contains("**ВИСТУПИЛИ:** Остап Гнатюк [00:05; 02:00; 04:20]\n- Зроблено: отримали 12 генераторів на склад; перевірили зв'язок; Склад на 40 місць заповнено\n- Проблеми: Бракує пального\n"), "{md}");
@@ -2607,7 +2639,7 @@ mod tests {
         assert!(md.contains("**ВИСТУПИЛИ:** Тарас Мельник [01:00; 03:20]\n- Зроблено: Провели навчання з водіями\n"), "{md}");
         // Off: in time order, as before
         let spec = MeetingSpec { group_by_speaker: Some(false), ..spec };
-        let md = build_meeting_document(&DocInput { title: "Нарада", date: None, lines: &lines, reports: &reports, spec: &spec, summaries: &Default::default(), fields: &fields, part_starts: &[], absent: &[], control: &[], decisions: &[], tasks: &[], questions: &[] });
+        let md = build_meeting_document(&DocInput { title: "Нарада", date: None, lines: &lines, reports: &reports, spec: &spec, summaries: &Default::default(), fields: &fields, part_starts: &[], absent: &[], control: &[], decisions: &[], tasks: &[], questions: &[], speaker_blocks: &[], overall: "", note: None });
         assert_eq!(md.matches("**ВИСТУПИЛИ:**").count(), 5);
     }
 

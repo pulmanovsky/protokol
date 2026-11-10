@@ -25,6 +25,10 @@ interface SummaryGeneratorButtonGroupProps {
   hasSummary?: boolean;
   isModelConfigLoading?: boolean;
   onOpenModelSettings?: (openFn: () => void) => void;
+  /** Before the language: the template of the document */
+  templateSlot?: ReactNode;
+  /** The model's button in the toolbar (the dialog still opens when the model is missing) */
+  showModelButton?: boolean;
 }
 
 export function SummaryGeneratorButtonGroup({
@@ -39,7 +43,9 @@ export function SummaryGeneratorButtonGroup({
   hasSummary = false,
   isModelConfigLoading = false,
   onOpenModelSettings,
-  languageSlot
+  languageSlot,
+  templateSlot,
+  showModelButton = true,
 }: SummaryGeneratorButtonGroupProps) {
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
 
@@ -90,16 +96,19 @@ export function SummaryGeneratorButtonGroup({
         </button>
       )}
 
+      {templateSlot}
       {languageSlot}
 
       <Dialog open={settingsDialogOpen} onOpenChange={setSettingsDialogOpen}>
-        <DialogTrigger asChild>
-          <button type="button" className="tb-btn tb-side" title={modelConfig.model ? `Модель для документа: ${modelConfig.model}` : 'Модель для документа'}>
-            <Cpu className="h-4 w-4" />
-            <span className="tb-label max-w-[140px] truncate">{modelName}</span>
-            <ChevronDown className="tb-chevron h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-        </DialogTrigger>
+        {showModelButton && (
+          <DialogTrigger asChild>
+            <button type="button" className="tb-btn tb-side" title={modelConfig.model ? `Модель для документа: ${modelConfig.model}` : 'Модель для документа'}>
+              <Cpu className="h-4 w-4" />
+              <span className="tb-label max-w-[140px] truncate">{modelName}</span>
+              <ChevronDown className="tb-chevron h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </DialogTrigger>
+        )}
         <DialogContent aria-describedby={undefined}>
           <VisuallyHidden>
             <DialogTitle>Модель для документа</DialogTitle>

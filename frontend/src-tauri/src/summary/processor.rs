@@ -616,6 +616,11 @@ fn set_current_stage(stage: &str) {
     }
 }
 
+/// Nothing is being made: the progress line says nothing
+pub(crate) fn clear_current_stage() {
+    set_current_stage("");
+}
+
 pub fn current_stage() -> String {
     CURRENT_STAGE.lock().map(|s| s.clone()).unwrap_or_default()
 }
@@ -891,17 +896,161 @@ const VERBATIM_BLOCK_WORDS: usize = 25;
 const OVERALL_SOURCE_TOKENS: usize = 16_000;
 /// Size of a piece of one person's speech given to the model at once
 const BLOCK_PIECE_TOKENS: usize = 5000;
+/// Speakers tried before giving up when the model has answered none of them
+const GIVE_UP_AFTER_FAILED_BLOCKS: usize = 2;
 
+/// Why a speaker's words stayed as said
+#[derive(Debug, Clone, PartialEq)]
+enum KeptReason {
+    /// No answer within `REPORT_SUMMARY_TIMEOUT`
+    Timeout,
+    /// The model could not be run (its message, for the log)
+    Error(String),
+    /// An empty answer
+    Empty,
+}
+
+impl KeptReason {
+    fn for_log(&self) -> String {
+        match self {
+            KeptReason::Timeout => format!("timeout after {}s", REPORT_SUMMARY_TIMEOUT.as_secs()),
+            KeptReason::Error(e) => format!("error: {e}"),
+            KeptReason::Empty => "no answer".to_string(),
+        }
+    }
+
+    /// The cause in the secretary's words
+    fn in_words(&self) -> String {
+        match self {
+            KeptReason::Timeout => format!("модель документа не відповіла за {} хв", REPORT_SUMMARY_TIMEOUT.as_secs() / 60),
+            KeptReason::Error(_) => "модель документа не запустилася".to_string(),
+            KeptReason::Empty => "модель документа повернула порожню відповідь".to_string(),
+        }
+    }
+}
+
+/// Memory of this Mac in whole GB (0 when unknown)
+fn system_ram_gb() -> u64 {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    sys.total_memory() / (1024 * 1024 * 1024)
+}
+
+/// Below the document's header: whose words are as said, and why
+fn kept_as_said_note(kept: &[String], total: usize, reason: &KeptReason) -> String {
+    format!(
+        "*Підсумків немає для {} із {} доповідачів ({}): {}. Їхні слова подано дослівно.*",
+        kept.len(),
+        total,
+        kept.join(", "),
+        reason.in_words()
+    )
+}
+
+/// The error shown instead of a document when no speaker was summarised
+fn no_summaries_message(reason: &KeptReason, ram_gb: u64) -> String {
+    let mut text = format!("Документ не створено: {}.", reason.in_words());
+    if ram_gb > 0 && ram_gb < 16 {
+        text.push_str(&format!(" На цьому Mac {ram_gb} ГБ пам'яті, а моделі документа потрібно 16 ГБ."));
+    } else if *reason == KeptReason::Timeout {
+        text.push_str(" Закрийте інші програми та натисніть «Створити заново».");
+    }
+    text
+}
+
+/// The document's heading: the main template keeps «Матеріали наради»
+fn document_title(template: &Template) -> &str {
+    if ["Загальна зустріч", "Підсумки доповідачів"].contains(&template.name.as_str()) {
+        "Матеріали наради"
+    } else {
+        template.name.as_str()
+    }
+}
+
+/// The system prompt with the secretary's «Побажання до тексту», if any
+fn with_wishes(system: String, spec: &crate::summary::templates::MeetingSpec) -> String {
+    match spec.wishes.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
+        Some(w) => format!("{system}\n\nПобажання секретаря до тексту документа: {w}"),
+        None => system,
+    }
+}
+
+/// Decisions, tasks and open questions in one pass over the transcript (a
+/// long meeting in overlapping windows). Returns the raw answers, whether
+/// there were several windows, and whether reasoning was stripped.
+async fn items_pass(
+    llm: &LlmCallContext<'_>,
+    system: &str,
+    text: &str,
+    parts: &[String],
+    budget: usize,
+    with_speakers: bool,
+    with_tasks: bool,
+) -> Result<(String, bool, bool), String> {
+    use super::materials;
+    let item_parts = items_windows(text, parts, budget);
+    let mut items = String::new();
+    let mut reasoning_stripped = false;
+    for (i, part) in item_parts.iter().enumerate() {
+        let found = llm
+            .complete_with_retry(system, &materials::items_user_prompt(part, with_speakers, with_tasks), &format!("Decisions and tasks {}/{}", i + 1, item_parts.len()))
+            .await?;
+        reasoning_stripped |= found.reasoning_stripped;
+        items.push_str(&found.markdown);
+        items.push('\n');
+    }
+    Ok((items, item_parts.len() > 1, reasoning_stripped))
+}
+
+/// «Контроль»: each task of the earlier meeting against the few lines of
+/// this meeting that talk about it (small prompts for the local model)
+async fn control_of_earlier(llm: &LlmCallContext<'_>, system: &str, custom_prompt: &str, lines: &[super::materials::Line]) -> Vec<(String, String, Option<u32>)> {
+    use super::materials;
+    let mut control: Vec<(String, String, Option<u32>)> = Vec::new();
+    let earlier = materials::earlier_tasks_from_facts(custom_prompt);
+    info!("Контроль: {} task(s) from the earlier meeting", earlier.len());
+    for (n, task) in earlier.iter().enumerate() {
+        let what = task.split('|').next().unwrap_or(task).trim().to_string();
+        let near = materials::lines_about(lines, task, 4);
+        if near.is_empty() {
+            control.push((what, "Не згадувалось".into(), None));
+            continue;
+        }
+        let excerpt: String = near.iter().map(|&i| format!("[{}] {}\n", materials::mmss(lines[i].seconds), lines[i].text)).collect();
+        let stage = format!("Control {}/{}", n + 1, earlier.len());
+        let prompt = materials::control_user_prompt(task, &excerpt);
+        let call = llm.complete_with_retry(system, &prompt, &stage);
+        match tokio::time::timeout(REPORT_SUMMARY_TIMEOUT, call).await {
+            Ok(Ok(out)) => {
+                let (status, at) = materials::parse_control_answer(&out.markdown, lines);
+                control.push((what, status, at));
+            }
+            _ => control.push((what, "Не перевірено".into(), None)),
+        }
+    }
+    control
+}
+
+/// Speakers known: one block per person in the order they first spoke, and
+/// the template's other blocks (overall summary, decisions, tasks…) in its order
+#[allow(clippy::too_many_arguments)]
 async fn speaker_blocks_document(
     llm: &LlmCallContext<'_>,
+    text: &str,
+    parts: &[String],
+    budget: usize,
     lines: &[super::materials::Line],
     reports: &[super::materials::Report],
     custom_prompt: &str,
     template: &Template,
+    spec: &crate::summary::templates::MeetingSpec,
     system: &str,
 ) -> Result<GeneratedMeetingSummary, String> {
     use super::materials;
-    let mut blocks = materials::speaker_blocks(lines, reports);
+    use crate::summary::templates::OVERALL_BLOCK;
+    let order = spec.speaker_document_blocks();
+    let has = |b: &str| order.iter().any(|x| x == b);
+    let mut blocks = if has("Хід наради") { materials::speaker_blocks(lines, reports) } else { Vec::new() };
     let words = |b: &materials::SpeakerBlock| b.lines.iter().map(|l| l.1.split_whitespace().count()).sum::<usize>();
     let total = blocks.iter().filter(|b| words(b) >= VERBATIM_BLOCK_WORDS).count();
     let mut done = 0;
@@ -910,7 +1059,16 @@ async fn speaker_blocks_document(
     let all_said = super::numbers::Said::of(&everything);
     let mut unbacked = 0;
     let mut numbers = materials::NumbersKept::default();
+    // Speakers whose words stayed as said because the model gave no answer
+    let mut kept: Vec<String> = Vec::new();
+    let mut kept_reason: Option<KeptReason> = None;
+    let mut summarised = 0usize;
     for block in blocks.iter_mut() {
+        // The model has answered nobody so far: one more wait would only
+        // make the secretary wait longer for the same result
+        if summarised == 0 && kept.len() >= GIVE_UP_AFTER_FAILED_BLOCKS {
+            break;
+        }
         if words(block) < VERBATIM_BLOCK_WORDS {
             block.text = materials::verbatim_points(&block.lines);
             continue;
@@ -922,24 +1080,41 @@ async fn speaker_blocks_document(
         }
         done += 1;
         let stage = format!("Report summary {done}/{total}");
-        let points = materials::points_for(working.iter().map(|l| l.1.split_whitespace().count()).sum());
+        let spoken_words = working.iter().map(|l| l.1.split_whitespace().count()).sum();
+        let points = if spec.detailed { materials::points_for_detailed(spoken_words) } else { materials::points_for(spoken_words) };
         let pieces = materials::lines_for_model(&working, BLOCK_PIECE_TOKENS);
         let per_piece = points.div_ceil(pieces.len().max(1));
         let mut written = Vec::new();
+        let mut answered = false;
+        let mut missed = false;
         for piece in pieces {
-            let prompt = materials::speaker_block_prompt(&block.speaker, &piece, per_piece);
+            let prompt = materials::speaker_block_prompt(&block.speaker, &piece, per_piece, spec.detailed);
             match tokio::time::timeout(REPORT_SUMMARY_TIMEOUT, llm.complete_with_retry(system, &prompt, &stage)).await {
                 Ok(Ok(a)) if !a.markdown.trim().is_empty() => {
                     reasoning_stripped |= a.reasoning_stripped;
                     written.push(materials::as_points(&a.markdown, per_piece));
+                    answered = true;
                 }
                 Ok(Err(e)) if llm.is_cancelled() => return Err(e),
                 other => {
-                    warn!("Speaker block kept as said: {}", if other.is_err() { "timeout" } else { "no answer" });
+                    let reason = match &other {
+                        Err(_) => KeptReason::Timeout,
+                        Ok(Err(e)) => KeptReason::Error(e.clone()),
+                        Ok(Ok(_)) => KeptReason::Empty,
+                    };
+                    warn!("Speaker block kept as said: {}", reason.for_log());
+                    kept_reason.get_or_insert(reason);
+                    missed = true;
                     let at = piece.lines().filter_map(|l| l.strip_prefix('[').and_then(|r| r.split_once("] "))).map(|(t, x)| format!("- {x} [{t}]")).collect::<Vec<_>>().join("\n");
                     written.push(at);
                 }
             }
+        }
+        if answered {
+            summarised += 1;
+        }
+        if missed {
+            kept.push(block.speaker.clone());
         }
         let said = super::numbers::Said::of(&block.lines.iter().map(|l| l.1.as_str()).collect::<Vec<_>>().join(" "));
         let (whole, kept) = materials::keep_numbers(&materials::clean_points(&written.join("\n")), &working);
@@ -950,33 +1125,92 @@ async fn speaker_blocks_document(
         block.text = text;
         unbacked += marked;
     }
-    let all: String = blocks.iter().map(|b| format!("{}:\n{}", b.speaker, b.text)).collect::<Vec<_>>().join("\n\n");
-    // Only the blocks are read; the very longest meetings keep to what fits
-    let cap = (OVERALL_SOURCE_TOKENS as f64 / 0.35) as usize;
-    let source: String = all.chars().take(cap).collect();
-    let overall = match llm.complete_with_retry(system, &materials::overall_summary_prompt(&source), "Overall summary").await {
-        Ok(a) => {
-            reasoning_stripped |= a.reasoning_stripped;
-            let (text, marked) = materials::mark_unbacked_numbers(&materials::as_points(&a.markdown, 10), &all_said, &all_said);
-            unbacked += marked;
-            text
-        }
-        Err(e) if llm.is_cancelled() => return Err(e),
-        Err(e) => {
-            warn!("Overall summary failed: {e}");
-            String::new()
-        }
-    };
+    // Nobody summarised: a document of the transcript as said would look
+    // like a finished one, so the secretary gets the reason instead
+    if total > 0 && summarised == 0 {
+        let reason = kept_reason.unwrap_or(KeptReason::Empty);
+        warn!("No speaker block summarised ({} tried): {}", kept.len(), reason.for_log());
+        return Err(no_summaries_message(&reason, system_ram_gb()));
+    }
+    // Blocks never reached after giving up keep the speech as said
+    for block in blocks.iter_mut().filter(|b| b.text.is_empty()) {
+        block.text = materials::verbatim_points(&block.lines);
+    }
+    // Decisions, tasks and open questions: one pass over the transcript
+    let (mut decisions, mut tasks, mut questions) = (Vec::new(), Vec::new(), Vec::new());
+    if has("Рішення") || has("Завдання") || has("Відкриті питання") {
+        let (items, windowed, stripped) = items_pass(llm, system, text, parts, budget, true, has("Завдання")).await.map_err(|e| {
+            if llm.is_cancelled() {
+                return e;
+            }
+            warn!("Decisions and tasks failed: {e}");
+            no_summaries_message(&KeptReason::Error(e), system_ram_gb())
+        })?;
+        reasoning_stripped |= stripped;
+        let merge = |found: Vec<materials::Item>| if windowed { materials::merge_window_items(found) } else { found };
+        decisions = materials::keep_real_decisions(merge(materials::parse_items(&items, "Рішення", lines)), lines);
+        let mut found = materials::keep_real_tasks(merge(materials::parse_items(&items, "Завдання", lines)), lines);
+        materials::fill_owners(&mut found, lines, reports);
+        tasks = materials::dedup_tasks(materials::short_tasks_only(found));
+        questions = merge(materials::parse_items(&items, "Відкриті питання", lines));
+        info!("Items: {} decision(s), {} task(s), {} open question(s)", decisions.len(), tasks.len(), questions.len());
+    }
+    let mut overall = String::new();
+    if has(OVERALL_BLOCK) {
+        // The blocks when there are any, else the transcript by speaker
+        let all: String = if blocks.is_empty() {
+            (0..reports.len()).map(|i| format!("{}:\n{}", reports[i].speaker, materials::report_text(lines, reports, i))).collect::<Vec<_>>().join("\n\n")
+        } else {
+            blocks.iter().map(|b| format!("{}:\n{}", b.speaker, b.text)).collect::<Vec<_>>().join("\n\n")
+        };
+        // The very longest meetings keep to what fits
+        let cap = (OVERALL_SOURCE_TOKENS as f64 / 0.35) as usize;
+        let source: String = all.chars().take(cap).collect();
+        let (_, most) = materials::overall_points(spec.detailed);
+        overall = match llm.complete_with_retry(system, &materials::overall_summary_prompt(&source, spec.detailed), "Overall summary").await {
+            Ok(a) => {
+                reasoning_stripped |= a.reasoning_stripped;
+                let (text, marked) = materials::mark_unbacked_numbers(&materials::as_points(&a.markdown, most), &all_said, &all_said);
+                unbacked += marked;
+                text
+            }
+            Err(e) if llm.is_cancelled() => return Err(e),
+            Err(e) => {
+                warn!("Overall summary failed: {e}");
+                String::new()
+            }
+        };
+    }
+    let control = if has("Контроль") { control_of_earlier(llm, system, custom_prompt, lines).await } else { Vec::new() };
+    let absent = if has("Не доповідали") { materials::absent_regulars(custom_prompt, reports) } else { Vec::new() };
     info!("Speaker blocks: {} block(s), {} point(s) with a number the transcript does not back; lost numbers: {numbers:?}", blocks.len(), unbacked);
     #[cfg(test)]
     println!("lost numbers: {numbers:?}");
     let date = materials::date_from_facts(custom_prompt);
-    let title = if template.name == "Загальна зустріч" { "Матеріали наради" } else { template.name.as_str() };
-    let markdown = ukrainian_prompts::tidy_summary(&materials::speaker_blocks_markdown(title, date.as_deref(), lines, reports, &blocks, &overall));
+    let note = kept_reason.as_ref().filter(|_| !kept.is_empty()).map(|r| kept_as_said_note(&kept, total, r));
+    let in_order = crate::summary::templates::MeetingSpec { blocks: order.clone(), ..spec.clone() };
+    let markdown = ukrainian_prompts::tidy_summary(&materials::build_meeting_document(&materials::DocInput {
+        title: document_title(template),
+        date: date.as_deref(),
+        lines,
+        reports,
+        spec: &in_order,
+        summaries: &Default::default(),
+        fields: &Default::default(),
+        part_starts: &[],
+        absent: &absent,
+        control: &control,
+        decisions: &decisions,
+        tasks: &tasks,
+        questions: &questions,
+        speaker_blocks: &blocks,
+        overall: &overall,
+        note: note.as_deref(),
+    }));
     Ok(GeneratedMeetingSummary {
         final_markdown: markdown.clone(),
         english_markdown: markdown,
-        successful_chunk_count: blocks.len() as i64,
+        successful_chunk_count: blocks.len().max(1) as i64,
         reasoning_stripped,
         normalization_fallback: false,
     })
@@ -1002,7 +1236,7 @@ async fn generate_materials(
         return Err("Стенограма порожня".into());
     }
     let mut speaker_reports = materials::speaker_reports(&mut lines);
-    let system = ukrainian_prompts::notes_system_prompt(glossary);
+    let system = with_wishes(ukrainian_prompts::notes_system_prompt(glossary), &spec);
     // Room for the prompt wrapper and the whole answer, with the real
     // tokenizer's count: a part sized by the rough count alone could leave
     // the answer no room or not fit at all (the helper then refuses it)
@@ -1024,7 +1258,7 @@ async fn generate_materials(
     // Speakers known: the document is one block per person and an overall summary
     if !spec.classic {
         if let Some(reports) = speaker_reports.as_ref() {
-            return speaker_blocks_document(llm, &lines, reports, custom_prompt, template, &system).await;
+            return speaker_blocks_document(llm, text, &parts, budget, &lines, reports, custom_prompt, template, &spec, &system).await;
         }
     }
 
@@ -1288,32 +1522,7 @@ async fn generate_materials(
     if unreflected_count > 0 {
         info!("Sentences not reflected in the write-up, shown as «Не враховано»: {unreflected_count}");
     }
-    // «Контроль»: each task of the earlier meeting against the few lines
-    // of this meeting that talk about it (small prompts for the local model)
-    let mut control: Vec<(String, String, Option<u32>)> = Vec::new();
-    if spec.has("Контроль") {
-        let earlier = materials::earlier_tasks_from_facts(custom_prompt);
-        info!("Контроль: {} task(s) from the earlier meeting", earlier.len());
-        for (n, task) in earlier.iter().enumerate() {
-            let what = task.split('|').next().unwrap_or(task).trim().to_string();
-            let near = materials::lines_about(&lines, task, 4);
-            if near.is_empty() {
-                control.push((what, "Не згадувалось".into(), None));
-                continue;
-            }
-            let excerpt: String = near.iter().map(|&i| format!("[{}] {}\n", materials::mmss(lines[i].seconds), lines[i].text)).collect();
-            let stage = format!("Control {}/{}", n + 1, earlier.len());
-            let prompt = materials::control_user_prompt(task, &excerpt);
-            let call = llm.complete_with_retry(&system, &prompt, &stage);
-            match tokio::time::timeout(REPORT_SUMMARY_TIMEOUT, call).await {
-                Ok(Ok(out)) => {
-                    let (status, at) = materials::parse_control_answer(&out.markdown, &lines);
-                    control.push((what, status, at));
-                }
-                _ => control.push((what, "Не перевірено".into(), None)),
-            }
-        }
-    }
+    let control = if spec.has("Контроль") { control_of_earlier(llm, &system, custom_prompt, &lines).await } else { Vec::new() };
     let roles = materials::roles_from_facts(custom_prompt);
     let _ = &roles;
     let part_starts = materials::assign_parts(&spec.parts, &lines, &reports, &roles);
@@ -1334,10 +1543,39 @@ async fn generate_materials(
     materials::add_sources(&lines, &reports, &mut fields, &mut summaries);
     let mut questions = merge(materials::parse_items(&items, "Відкриті питання", &lines));
     questions.extend(grounded_questions);
+    // «Загальний підсумок» from what «Хід наради» says, else from the transcript
+    let mut overall = String::new();
+    if spec.has(crate::summary::templates::OVERALL_BLOCK) {
+        let course: Vec<String> = (0..reports.len())
+            .filter_map(|i| {
+                let said = match (fields.get(&i), summaries.get(&i)) {
+                    (Some(values), _) => values.iter().map(|(f, v)| format!("{f}: {v}")).collect::<Vec<_>>().join("\n"),
+                    (None, Some(summary)) => summary.clone(),
+                    (None, None) => return None,
+                };
+                Some(format!("{}:\n{}", reports[i].speaker, materials::without_source_marks(&said)))
+            })
+            .collect();
+        let all = if course.is_empty() {
+            (0..reports.len()).map(|i| format!("{}:\n{}", reports[i].speaker, materials::report_text(&lines, &reports, i))).collect::<Vec<_>>().join("\n\n")
+        } else {
+            course.join("\n\n")
+        };
+        let cap = (OVERALL_SOURCE_TOKENS as f64 / 0.35) as usize;
+        let source: String = all.chars().take(cap).collect();
+        let (_, most) = materials::overall_points(spec.detailed);
+        match llm.complete_with_retry(&system, &materials::overall_summary_prompt(&source, spec.detailed), "Overall summary").await {
+            Ok(a) => {
+                reasoning_stripped |= a.reasoning_stripped;
+                overall = materials::as_points(&a.markdown, most);
+            }
+            Err(e) if llm.is_cancelled() => return Err(e),
+            Err(e) => warn!("Overall summary failed: {e}"),
+        }
+    }
     let date = materials::date_from_facts(custom_prompt);
-    let title = if template.name == "Загальна зустріч" { "Матеріали наради" } else { template.name.as_str() };
     let markdown = ukrainian_prompts::tidy_summary(&materials::build_meeting_document(&materials::DocInput {
-        title,
+        title: document_title(template),
         date: date.as_deref(),
         lines: &lines,
         reports: &reports,
@@ -1350,6 +1588,9 @@ async fn generate_materials(
         decisions: &decisions,
         tasks: &tasks,
         questions: &questions,
+        speaker_blocks: &[],
+        overall: &overall,
+        note: None,
     }));
 
     Ok(GeneratedMeetingSummary {
@@ -1559,10 +1800,76 @@ mod tests {
         let reports = super::super::materials::speaker_reports(&mut lines).unwrap();
         let system = ukrainian_prompts::notes_system_prompt(&[]);
         let started = std::time::Instant::now();
-        let out = speaker_blocks_document(&llm, &lines, &reports, "", &uk_template(), &system).await.unwrap();
+        let spec = crate::summary::templates::MeetingSpec::default();
+        let out = speaker_blocks_document(&llm, &text, &[text.clone()], 100_000, &lines, &reports, "", &uk_template(), &spec, &system).await.unwrap();
         crate::summary::summary_engine::force_shutdown_sidecar().await.ok();
         std::fs::write(std::env::var("PROTOKOL_BLOCKS_OUT").unwrap(), &out.final_markdown).unwrap();
         println!("built in {:.0} s, {} chars, {} blocks", started.elapsed().as_secs_f64(), out.final_markdown.chars().count(), out.successful_chunk_count);
+    }
+
+    fn three_speakers() -> (Vec<super::super::materials::Line>, Vec<super::super::materials::Report>) {
+        let long = "Склад перевірено, двадцять ящиків прийнято, документи передано до штабу, наступна перевірка в четвер о дев'ятій, відповідальний черговий зміни, зауважень немає, усе працює як треба, дякую за увагу.";
+        let text = format!("[00:05] Спікер 1: {long}\n[01:10] Спікер 2: {long}\n[02:20] Спікер 3: {long}\n");
+        let mut lines = super::super::materials::parse_transcript(&text);
+        let reports = super::super::materials::speaker_reports(&mut lines).unwrap();
+        (lines, reports)
+    }
+
+    #[tokio::test]
+    async fn a_model_that_never_answers_gives_the_reason_instead_of_the_transcript() {
+        let (lines, reports) = three_speakers();
+        let (client, provider) = (Client::new(), LLMProvider::Ollama);
+        // Nothing listens on the discard port: every call fails at once
+        let llm = LlmCallContext { client: &client, provider: &provider, model_name: "none", api_key: "", ollama_endpoint: Some("http://127.0.0.1:9"), custom_openai_endpoint: None, max_tokens: None, temperature: None, top_p: None, app_data_dir: None, cancellation_token: None };
+        let spec = crate::summary::templates::MeetingSpec::default();
+        let error = speaker_blocks_document(&llm, "", &[], 100_000, &lines, &reports, "", &uk_template(), &spec, "system").await.unwrap_err();
+        assert!(error.starts_with("Документ не створено: модель документа не запустилася."), "{error}");
+        // «Рішення та завдання»: the same reason, not an empty document
+        let spec = crate::summary::templates::get_template("decisions_tasks_uk").unwrap().meeting.unwrap();
+        let error = speaker_blocks_document(&llm, "текст", &["текст".to_string()], 100_000, &lines, &reports, "", &uk_template(), &spec, "system").await.unwrap_err();
+        assert!(error.starts_with("Документ не створено: модель документа не запустилася."), "{error}");
+    }
+
+    #[tokio::test]
+    async fn the_document_has_the_templates_blocks_in_its_order() {
+        let (lines, reports) = three_speakers();
+        let (client, provider) = (Client::new(), LLMProvider::Ollama);
+        let llm = LlmCallContext { client: &client, provider: &provider, model_name: "none", api_key: "", ollama_endpoint: Some("http://127.0.0.1:9"), custom_openai_endpoint: None, max_tokens: None, temperature: None, top_p: None, app_data_dir: None, cancellation_token: None };
+        // Only the transcript: no model needed
+        let spec = crate::summary::templates::MeetingSpec { blocks: vec!["Стенограма".into()], ordered: true, ..Default::default() };
+        let out = speaker_blocks_document(&llm, "", &[], 100_000, &lines, &reports, "", &uk_template(), &spec, "system").await.unwrap();
+        let md = out.final_markdown;
+        assert!(md.contains("## Стенограма по доповідачах"), "{md}");
+        assert!(!md.contains("## Хід наради") && !md.contains("## Загальний підсумок"), "{md}");
+        assert!(md.contains("Спікер 2"), "{md}");
+    }
+
+    #[test]
+    fn the_secretary_sees_whose_words_are_as_said_and_why() {
+        let kept = vec!["Спікер 2".to_string(), "Спікер 3".to_string()];
+        assert_eq!(
+            kept_as_said_note(&kept, 5, &KeptReason::Timeout),
+            "*Підсумків немає для 2 із 5 доповідачів (Спікер 2, Спікер 3): модель документа не відповіла за 2 хв. Їхні слова подано дослівно.*"
+        );
+        assert_eq!(
+            no_summaries_message(&KeptReason::Timeout, 8),
+            "Документ не створено: модель документа не відповіла за 2 хв. На цьому Mac 8 ГБ пам'яті, а моделі документа потрібно 16 ГБ."
+        );
+        assert_eq!(
+            no_summaries_message(&KeptReason::Timeout, 24),
+            "Документ не створено: модель документа не відповіла за 2 хв. Закрийте інші програми та натисніть «Створити заново»."
+        );
+        assert_eq!(no_summaries_message(&KeptReason::Error("connection refused".into()), 24), "Документ не створено: модель документа не запустилася.");
+        // The note sits under the header and the document still reads as before
+        let (lines, reports) = three_speakers();
+        let mut blocks = super::super::materials::speaker_blocks(&lines, &reports);
+        for b in blocks.iter_mut() {
+            b.text = super::super::materials::verbatim_points(&b.lines);
+        }
+        let note = kept_as_said_note(&kept, 3, &KeptReason::Timeout);
+        let md = super::super::materials::speaker_blocks_markdown("Нарада", None, &lines, &reports, &blocks, "", Some(&note));
+        assert!(md.find("Підсумків немає").unwrap() < md.find("## Хід наради").unwrap());
+        assert_eq!(super::super::learned::parse_doc(&md).reports.len(), 3);
     }
 
     #[test]

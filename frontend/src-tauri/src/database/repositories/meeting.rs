@@ -276,6 +276,10 @@ async fn delete_meeting_with_transaction(
         .bind(meeting_id)
         .execute(&mut *transaction)
         .await?;
+    sqlx::query("DELETE FROM document_variants WHERE meeting_id = ?")
+        .bind(meeting_id)
+        .execute(&mut *transaction)
+        .await?;
 
     // 3. Delete from transcripts
     sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")

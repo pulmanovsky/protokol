@@ -72,14 +72,17 @@ pub async fn api_confirm<R: Runtime>(app: AppHandle<R>, title: String, message: 
     // Test runs only: the answer without a system dialog
     #[cfg(feature = "test-hooks")]
     if let Ok(a) = std::env::var("PROTOKOL_TEST_CONFIRM") {
+        log::info!("api_confirm «{}»: {} (test answer)", title, a);
         return a == "yes";
     }
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-    let mut builder = app.dialog().message(message).title(title).kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancelCustom(ok, cancel));
+    let mut builder = app.dialog().message(message).title(title.clone()).kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancelCustom(ok, cancel));
     if let Some(window) = app.get_webview_window("main") {
         builder = builder.parent(&window);
     }
-    tauri::async_runtime::spawn_blocking(move || builder.blocking_show()).await.unwrap_or(false)
+    let answer = tauri::async_runtime::spawn_blocking(move || builder.blocking_show()).await.unwrap_or(false);
+    log::info!("api_confirm «{}»: {}", title, if answer { "yes" } else { "no" });
+    answer
 }
 
 /// A folder chosen in the system's panel (None: cancelled)
