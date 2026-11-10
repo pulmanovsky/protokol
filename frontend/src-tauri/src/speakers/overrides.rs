@@ -58,6 +58,7 @@ pub async fn reassign(pool: &SqlitePool, meeting_id: &str, segment_id: &str, spe
         sqlx::query("UPDATE transcripts SET speaker = ?, speaker_manual = 1 WHERE id = ?").bind(speaker).bind(id).execute(&mut *tx).await?;
     }
     tx.commit().await?;
+    super::saved::unhide(pool, speaker).await?;
     ensure_listed(pool, meeting_id, speaker, chosen.iter().map(|c| (c.2 - c.1).max(0.0)).sum()).await?;
     Ok(chosen.into_iter().map(|(id, a, b, _)| (id, a, b)).collect())
 }
@@ -214,7 +215,9 @@ pub async fn people(pool: &SqlitePool, meeting_id: &str) -> Result<(Vec<String>,
     // «Репліки» (short remarks of several voices) is not a person
     let here: Vec<String> = here.into_iter().filter(|s| s != super::commands::REMARKS && seen.insert(s.clone())).collect();
     let known: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM (SELECT name FROM voice_profiles UNION SELECT name FROM meeting_speakers WHERE name IS NOT NULL) WHERE TRIM(name) <> '' ORDER BY name",
+        // Not the names set aside in «Усі збережені»
+        "SELECT name FROM (SELECT name FROM voice_profiles UNION SELECT name FROM meeting_speakers WHERE name IS NOT NULL)
+         WHERE TRIM(name) <> '' AND name NOT IN (SELECT name FROM hidden_speaker_names) ORDER BY name",
     )
     .fetch_all(pool)
     .await?;

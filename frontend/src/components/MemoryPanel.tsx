@@ -5,6 +5,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { toast } from '@/lib/notice';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { plural } from '@/lib/plural';
+import { SavedSpeakers } from '@/components/SavedSpeakers';
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { X } from 'lucide-react';
 
 interface Rule {
   from: string;
@@ -44,6 +47,8 @@ export function MemoryPanel({ version, onChanged }: { version: number; onChanged
   const [examples, setExamples] = useState(0);
   const [today, setToday] = useState<Summary | null>(null);
   const [all, setAll] = useState<Summary | null>(null);
+  // «Переглянути всіх»: the people the app knows
+  const [peopleOpen, setPeopleOpen] = useState(false);
 
   const load = useCallback(() => {
     invoke<Correction[]>('api_corrections').then(setCorrections).catch(() => setCorrections([]));
@@ -80,6 +85,20 @@ export function MemoryPanel({ version, onChanged }: { version: number; onChanged
 
   return (
     <div className="flex flex-col gap-6">
+      <Dialog open={peopleOpen} onOpenChange={setPeopleOpen}>
+        <DialogContent className="flex w-[min(960px,calc(100vw-48px))] max-w-none flex-col gap-0 p-6 pb-2 sm:max-w-none [&>button.absolute]:hidden">
+          {/* The same header as «Спікери», so the window has the same size */}
+          <div className="flex h-10 items-center gap-4">
+            <DialogTitle className="text-xl font-bold">Збережені спікери</DialogTitle>
+            <span className="flex-1" />
+            <DialogClose className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--selected)]" aria-label="Закрити">
+              <X className="h-4 w-4" />
+            </DialogClose>
+          </div>
+          <DialogDescription className="mb-3 mt-1.5 h-5 truncate text-[13px] text-[color:var(--muted-text)]">Усі люди, яких програма знає. Зайвих можна забути: їх не буде впізнано і запропоновано.</DialogDescription>
+          <SavedSpeakers onChanged={() => { load(); onChanged(); }} onDone={() => setPeopleOpen(false)} />
+        </DialogContent>
+      </Dialog>
       <div className="memory-tiles">
         <section className="card memory-tile">
           <span className="memory-tile-label">Слова</span>
@@ -92,6 +111,9 @@ export function MemoryPanel({ version, onChanged }: { version: number; onChanged
           <b>{voices}</b>
           <span>{plural(voices, 'людина', 'людини', 'людей')}{today?.voices ? ` · +${today.voices} сьогодні` : ''}</span>
           <span>Упізнаються в наступних записах</span>
+          <button type="button" className="mt-1 self-start text-[13px] font-medium text-[var(--blue)] hover:underline" onClick={() => setPeopleOpen(true)}>
+            Переглянути всіх
+          </button>
         </section>
         <section className="card memory-tile">
           <span className="memory-tile-label">Документ</span>

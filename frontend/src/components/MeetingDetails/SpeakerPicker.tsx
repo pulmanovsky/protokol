@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Check, Search, UserPlus } from 'lucide-react';
+import { toast } from '@/lib/notice';
 
 /** Which lines get the new speaker */
 export type SpeakerScope = 'line' | 'following' | 'all';
@@ -102,6 +103,39 @@ export function SpeakerPicker({ meetingId, current, anchor, onPick, onClose, wor
     </button>
   );
 
+  // A name from earlier recordings that is not wanted: no longer offered
+  // (back in «Спікери → Усі збережені» or by typing it again)
+  const hideName = async (name: string) => {
+    try {
+      await invoke('set_saved_speaker', { name, recognize: null, suggest: false, role: null });
+      setKnown((k) => k.filter((n) => n !== name));
+      toast.success(`«${name}» більше не пропонується`, {
+        action: {
+          label: 'Скасувати',
+          onClick: async () => {
+            await invoke('set_saved_speaker', { name, recognize: null, suggest: true, role: null }).catch(() => {});
+            setKnown((k) => (k.includes(name) ? k : [...k, name].sort((a, b) => a.localeCompare(b, 'uk'))));
+          },
+        },
+      });
+    } catch (e) {
+      toast.error(`Не вдалося зберегти: ${e}`);
+    }
+  };
+  const knownRow = (name: string) => (
+    <div key={name} className="group relative">
+      {row(name)}
+      <button
+        type="button"
+        onClick={() => hideName(name)}
+        title="Більше не пропонувати це ім'я"
+        className="absolute right-1 top-1/2 hidden -translate-y-1/2 rounded-md bg-[var(--card-bg)] px-1.5 py-0.5 text-[11px] text-[color:var(--muted-text)] hover:text-gray-900 group-hover:block"
+      >
+        Не пропонувати
+      </button>
+    </div>
+  );
+
   return (
     <div
       ref={box}
@@ -149,7 +183,7 @@ export function SpeakerPicker({ meetingId, current, anchor, onPick, onClose, wor
         {shownKnown.length > 0 && (
           <>
             <div className="px-2.5 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--muted-text)]">Відомі люди</div>
-            {shownKnown.map(row)}
+            {shownKnown.map(knownRow)}
           </>
         )}
         {isNew ? (

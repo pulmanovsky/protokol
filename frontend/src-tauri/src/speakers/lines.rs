@@ -494,7 +494,7 @@ pub async fn whole_line_changes(pool: &SqlitePool, models: &std::path::Path, mee
     let model = super::commands::model_id(models);
     // The meeting's named voices, made firmer with what was learned of them before
     let named: Vec<(String, Vec<u8>)> = sqlx::query_as("SELECT name, centroid FROM meeting_speakers WHERE meeting_id = ? AND name IS NOT NULL AND name <> ''").bind(meeting_id).fetch_all(pool).await?;
-    let profiles: Vec<(String, Vec<u8>)> = sqlx::query_as("SELECT name, embedding FROM voice_profiles WHERE model = ?").bind(&model).fetch_all(pool).await?;
+    let profiles: Vec<(String, Vec<u8>)> = sqlx::query_as("SELECT name, embedding FROM voice_profiles WHERE model = ? AND recognize = 1").bind(&model).fetch_all(pool).await?;
     let unit = |v: Vec<f32>| {
         let n = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
         v.into_iter().map(|x| x / n).collect::<Vec<f32>>()

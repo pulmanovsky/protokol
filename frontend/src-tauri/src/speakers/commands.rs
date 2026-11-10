@@ -124,7 +124,8 @@ pub(crate) fn pool<R: Runtime>(app: &AppHandle<R>) -> Result<SqlitePool> {
 }
 
 pub(crate) async fn profiles(pool: &SqlitePool, model: &str) -> Vec<VoiceProfile> {
-    sqlx::query("SELECT name, embedding, meetings, role FROM voice_profiles WHERE model = ?")
+    // A voice switched off in «Усі збережені» names no one
+    sqlx::query("SELECT name, embedding, meetings, role FROM voice_profiles WHERE model = ? AND recognize = 1")
         .bind(model)
         .fetch_all(pool)
         .await
@@ -591,6 +592,8 @@ pub async fn rename_with(pool: &SqlitePool, model: &str, meeting_id: &str, curre
         return Ok(());
     }
     let pool = pool.clone();
+    // A name given by hand is offered again, even one set aside before
+    super::saved::unhide(&pool, name).await?;
     // «Ім'я (?)» is a suggestion of a voice: find it by its suggested name
     let lookup = current.trim_end_matches("(?)").trim();
     sqlx::query("UPDATE transcripts SET speaker = ? WHERE meeting_id = ? AND speaker = ?").bind(name).bind(meeting_id).bind(current).execute(&pool).await?;
@@ -929,7 +932,7 @@ pub async fn set_role_with(pool: &SqlitePool, meeting_id: &str, current: &str, r
 /// Facts for the meeting document: regular participants (named voices heard
 /// in at least two meetings) and roles of this meeting's voices
 pub async fn meeting_facts(pool: &SqlitePool, meeting_id: &str) -> String {
-    let regulars: Vec<String> = sqlx::query_scalar("SELECT name FROM voice_profiles WHERE meetings >= 2 ORDER BY name")
+    let regulars: Vec<String> = sqlx::query_scalar("SELECT name FROM voice_profiles WHERE meetings >= 2 AND name NOT IN (SELECT name FROM hidden_speaker_names) ORDER BY name")
         .fetch_all(pool)
         .await
         .unwrap_or_default();
@@ -990,7 +993,7 @@ pub async fn get_meeting_speakers<R: Runtime>(app: AppHandle<R>, meeting_id: Str
 /// `ukrainian::glossary_terms`): nicknames are recognised better next time
 pub async fn refresh_speaker_terms(pool: &SqlitePool) {
     let rows: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT name, role FROM voice_profiles ORDER BY meetings DESC, updated_at DESC").fetch_all(pool).await.unwrap_or_default();
+        sqlx::query_as("SELECT name, role FROM voice_profiles WHERE name NOT IN (SELECT name FROM hidden_speaker_names) ORDER BY meetings DESC, updated_at DESC").fetch_all(pool).await.unwrap_or_default();
     let mut terms: Vec<String> = Vec::new();
     for (name, role) in rows {
         terms.push(name);
