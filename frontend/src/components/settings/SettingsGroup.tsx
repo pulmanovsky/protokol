@@ -50,3 +50,28 @@ export function SettingsRow({
 export function SettingsBlock({ children }: { children: React.ReactNode }) {
   return <div className="settings-block">{children}</div>;
 }
+
+/** A row that opens something: a page, a form or a link (› or ↗ on the right) */
+export function SettingsLinkRow({
+  label,
+  sub,
+  onClick,
+  external = false,
+}: {
+  label: React.ReactNode;
+  sub?: React.ReactNode;
+  onClick: () => void;
+  external?: boolean;
+}) {
+  return (
+    <button type="button" className="settings-row w-full text-left hover:bg-[var(--hover)]" onClick={onClick}>
+      <span className="flex flex-col min-w-0">
+        <span>{label}</span>
+        {sub && <span className="text-xs text-[color:var(--muted-text)]">{sub}</span>}
+      </span>
+      <span className="flex-none text-[color:var(--muted-text)]" aria-hidden="true">
+        {external ? '↗' : '›'}
+      </span>
+    </button>
+  );
+}

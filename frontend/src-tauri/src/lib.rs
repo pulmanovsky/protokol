@@ -51,6 +51,7 @@ pub mod tray;
 pub mod app_menu;
 pub mod updates;
 pub mod logfile;
+pub mod feedback;
 pub mod identity;
 pub mod learned_events;
 pub mod waveform;
@@ -820,6 +821,7 @@ pub fn run() {
             api::test_backend_connection,
             api::debug_backend_connection,
             api::open_external_url,
+            feedback::api_feedback_info,
             // Custom OpenAI commands
             api::api_save_custom_openai_config,
             api::api_get_custom_openai_config,

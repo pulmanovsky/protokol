@@ -23,7 +23,7 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
-        .tooltip("протокол")
+        .tooltip("Протокол")
         .icon(app.default_window_icon().unwrap().clone())
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .build(app)?;
@@ -323,7 +323,7 @@ fn build_menu<R: Runtime>(
     // If recording is not allowed (during onboarding, no transcription model), show disabled message
     if !can_record {
         builder = builder.item(
-            &MenuItemBuilder::new("⏳ Downloading transcription model...")
+            &MenuItemBuilder::new("Завантажується модель розпізнавання…")
                 .enabled(false)
                 .build(app)?,
         );
@@ -335,45 +335,45 @@ fn build_menu<R: Runtime>(
             }
             RecordingState::Starting => {
                 builder = builder.item(
-                    &MenuItemBuilder::new("🔄 Starting Recording...")
+                    &MenuItemBuilder::new("Запис починається…")
                         .enabled(false)
                         .build(app)?,
                 );
             }
             RecordingState::Recording => {
                 builder = builder
-                    .item(&MenuItemBuilder::with_id("pause_recording", "⏸ Пауза").build(app)?)
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Завершити запис").build(app)?);
+                    .item(&MenuItemBuilder::with_id("pause_recording", "Пауза").build(app)?)
+                    .item(&MenuItemBuilder::with_id("stop_recording", "Завершити запис").build(app)?);
             }
             RecordingState::Pausing => {
                 builder = builder
                     .item(
-                        &MenuItemBuilder::new("⏸ Pausing...")
+                        &MenuItemBuilder::new("Пауза…")
                             .enabled(false)
                             .build(app)?,
                     )
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Завершити запис").build(app)?);
+                    .item(&MenuItemBuilder::with_id("stop_recording", "Завершити запис").build(app)?);
             }
             RecordingState::Paused => {
                 builder = builder
                     .item(
-                        &MenuItemBuilder::with_id("resume_recording", "▶ Продовжити запис")
+                        &MenuItemBuilder::with_id("resume_recording", "Продовжити запис")
                             .build(app)?,
                     )
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Завершити запис").build(app)?);
+                    .item(&MenuItemBuilder::with_id("stop_recording", "Завершити запис").build(app)?);
             }
             RecordingState::Resuming => {
                 builder = builder
                     .item(
-                        &MenuItemBuilder::new("▶ Resuming...")
+                        &MenuItemBuilder::new("Запис продовжується…")
                             .enabled(false)
                             .build(app)?,
                     )
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Завершити запис").build(app)?);
+                    .item(&MenuItemBuilder::with_id("stop_recording", "Завершити запис").build(app)?);
             }
             RecordingState::Stopping => {
                 builder = builder.item(
-                    &MenuItemBuilder::new("⏹ Stopping...")
+                    &MenuItemBuilder::new("Запис завершується…")
                         .enabled(false)
                         .build(app)?,
                 );
@@ -384,7 +384,7 @@ fn build_menu<R: Runtime>(
     builder
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&MenuItemBuilder::with_id("open_window", "Відкрити Протокол").build(app)?)
-        .item(&MenuItemBuilder::with_id("settings", "Налаштування").build(app)?)
+        .item(&MenuItemBuilder::with_id("settings", "Налаштування…").build(app)?)
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&MenuItemBuilder::with_id("quit", "Вийти з Протоколу").build(app)?)
         .build()

@@ -20,9 +20,11 @@ export interface RecordingPreferences {
 
 interface RecordingSettingsProps {
   onSave?: (preferences: RecordingPreferences) => void;
+  /** «storage»: the audio folder group shown in «Загальні»; «recording»: the «Запис» section */
+  part?: 'storage' | 'recording';
 }
 
-export function RecordingSettings({ onSave }: RecordingSettingsProps) {
+export function RecordingSettings({ onSave, part = 'recording' }: RecordingSettingsProps) {
   const [preferences, setPreferences] = useState<RecordingPreferences>({
     save_folder: '',
     auto_save: true,
@@ -37,19 +39,6 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   const { setSelectedDevices } = useConfig();
   const [audioSources, setAudioSources] = useAudioSources();
   const [hideFromScreenShare, setHideFromScreenShare] = useState(false);
-  const [autoDocument, setAutoDocument] = useState(false);
-  useEffect(() => {
-    invoke<boolean>('get_auto_document').then(setAutoDocument).catch(() => {});
-  }, []);
-  const handleAutoDocument = async (enabled: boolean) => {
-    setAutoDocument(enabled);
-    try {
-      await invoke('set_auto_document', { enabled });
-    } catch {
-      setAutoDocument(!enabled);
-      toast.error('Не вдалося зберегти налаштування');
-    }
-  };
   useEffect(() => {
     invoke<boolean>('api_get_hide_from_screen_share').then(setHideFromScreenShare).catch(() => {});
   }, []);
@@ -105,7 +94,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   const handleAutoSaveToggle = async (enabled: boolean) => {
     const newPreferences = { ...preferences, auto_save: enabled };
     setPreferences(newPreferences);
-    await savePreferences(newPreferences);
+    await savePreferences(newPreferences, true);
 
     // Track auto-save setting change
     await Analytics.track('auto_save_recording_toggled', {
@@ -160,12 +149,13 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     }
   };
 
-  const savePreferences = async (prefs: RecordingPreferences) => {
+  const savePreferences = async (prefs: RecordingPreferences, quiet = false) => {
     setSaving(true);
     try {
       await invoke('set_recording_preferences', { preferences: prefs });
       onSave?.(prefs);
 
+      if (quiet) return;
       // Show success toast with device details
       const micDevice = prefs.preferred_mic_device || 'за замовчуванням';
       const systemDevice = prefs.preferred_system_device || 'за замовчуванням';
@@ -191,14 +181,14 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     );
   }
 
-  return (
-    <div className="flex flex-col gap-6">
+  if (part === 'storage') {
+    return (
       <SettingsGroup
-        title="Аудіо"
+        title="Сховище"
         help={
           preferences.auto_save
-            ? 'Кожен запис — окрема папка зі звуком, названа за датою та часом.'
-            : 'Аудіо не зберігається: залишаються лише стенограма і підсумок.'
+            ? 'Кожен запис зберігається в окремій папці зі звуком, названій за датою та часом.'
+            : 'Аудіо не зберігається: залишаються лише стенограма та документ.'
         }
       >
         <SettingsRow label="Зберігати аудіозаписи">
@@ -208,7 +198,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
           <SettingsRow
             label={
               <span className="flex flex-col min-w-0">
-                <span>Папка для записів</span>
+                <span>Папка записів</span>
                 <span className="text-xs text-[color:var(--muted-text)] truncate" title={preferences.save_folder}>
                   {preferences.save_folder || 'Папка за замовчуванням'}
                 </span>
@@ -217,61 +207,47 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
           >
             <button type="button" onClick={handleOpenFolder} className="settings-button">
               <FolderOpen className="w-3.5 h-3.5" />
-              Відкрити
+              Показати у Finder
             </button>
           </SettingsRow>
         )}
       </SettingsGroup>
+    );
+  }
 
-      <SettingsGroup help="Після запису чи імпорту спікери розпізнаються самі (на цьому Mac). Далі можна одразу створити документ обраного типу.">
-        <SettingsRow label="Створювати документ після розпізнавання спікерів">
-          <Switch checked={autoDocument} onCheckedChange={handleAutoDocument} />
-        </SettingsRow>
-      </SettingsGroup>
-
-      <SettingsGroup help="На початку запису з'явиться нагадування повідомити учасників, що розмова записується.">
-        <SettingsRow label="Нагадування про запис">
-          <Switch checked={showRecordingNotification} onCheckedChange={handleNotificationToggle} />
-        </SettingsRow>
-      </SettingsGroup>
-
-      <SettingsGroup
-        title="Приватність"
-        help="Плавучий острівець запису ніколи не потрапляє в показ екрана. Головне вікно можна теж сховати від показу екрана в Zoom, Meet, Teams і від знімків екрана — тоді з нього не вийде зробити скріншот."
-      >
-        <SettingsRow label="Ховати і головне вікно Протоколу">
-          <Switch checked={hideFromScreenShare} onCheckedChange={handleHideFromScreenShare} />
-        </SettingsRow>
-      </SettingsGroup>
-
+  return (
+    <div className="flex flex-col gap-6">
       <SettingsGroup
         title="Джерела звуку"
-        help="Що записувати. Потрібне хоча б одне джерело. Під час запису мікрофон можна тимчасово вимкнути кнопкою або ⌘⇧M."
+        help={
+          isRecording
+            ? 'Під час запису пристрої змінити не можна. Завершіть запис, щоб змінити їх.'
+            : 'Потрібне хоча б одне джерело. Під час запису мікрофон можна тимчасово вимкнути кнопкою на панелі запису або ⇧⌘M.'
+        }
       >
-        <SettingsRow label="Мікрофон">
+        <SettingsRow label="Записувати мікрофон">
           <Switch
             checked={audioSources.micEnabled}
             disabled={isRecording || !audioSources.systemEnabled}
             onCheckedChange={(checked) => setAudioSources({ ...audioSources, micEnabled: checked })}
+            aria-label="Записувати мікрофон"
           />
         </SettingsRow>
-        <SettingsRow label="Звук дзвінка (весь звук Mac)">
+        <SettingsRow
+          label={
+            <span className="flex flex-col min-w-0">
+              <span>Записувати звук дзвінка</span>
+              <span className="text-xs text-[color:var(--muted-text)]">Увесь звук Mac: Meet, Zoom, Teams</span>
+            </span>
+          }
+        >
           <Switch
             checked={audioSources.systemEnabled}
             disabled={isRecording || !audioSources.micEnabled}
             onCheckedChange={(checked) => setAudioSources({ ...audioSources, systemEnabled: checked })}
+            aria-label="Записувати звук дзвінка"
           />
         </SettingsRow>
-      </SettingsGroup>
-
-      <SettingsGroup
-        title="Пристрої за замовчуванням"
-        help={
-          isRecording
-            ? 'Під час запису пристрої змінити не можна. Завершіть запис, щоб змінити їх.'
-            : 'Ці мікрофон і джерело звуку системи вибиратимуться для нових записів.'
-        }
-      >
         <SettingsBlock>
           <DeviceSelection
             selectedDevices={{
@@ -282,6 +258,25 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
             disabled={saving || isRecording}
           />
         </SettingsBlock>
+      </SettingsGroup>
+
+      <SettingsGroup
+        title="Під час запису"
+        help="Панель запису ніколи не потрапляє в показ екрана. Головне вікно також можна приховати від показу екрана в Zoom, Meet, Teams і від знімків екрана."
+      >
+        <SettingsRow
+          label={
+            <span className="flex flex-col min-w-0">
+              <span>Нагадувати повідомити учасників про запис</span>
+              <span className="text-xs text-[color:var(--muted-text)]">На початку запису з'являється нагадування повідомити учасників, що розмова записується</span>
+            </span>
+          }
+        >
+          <Switch checked={showRecordingNotification} onCheckedChange={handleNotificationToggle} aria-label="Нагадувати повідомити учасників про запис" />
+        </SettingsRow>
+        <SettingsRow label="Приховувати головне вікно під час показу екрана">
+          <Switch checked={hideFromScreenShare} onCheckedChange={handleHideFromScreenShare} aria-label="Приховувати головне вікно під час показу екрана" />
+        </SettingsRow>
       </SettingsGroup>
     </div>
   );

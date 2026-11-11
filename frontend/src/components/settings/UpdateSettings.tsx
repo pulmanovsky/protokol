@@ -1,14 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { relaunch } from '@tauri-apps/plugin-process';
-import { getVersion } from '@tauri-apps/api/app';
 import { toast } from '@/lib/notice';
 import { Switch } from '@/components/ui/switch';
 import { SettingsGroup, SettingsRow } from './SettingsGroup';
 import { confirmNative } from '@/lib/confirm';
+import { ChevronRight } from 'lucide-react';
 
 interface Available {
   version: string;
@@ -22,9 +22,10 @@ interface Available {
  * and an update from a folder for closed networks. Installed only on the
  * user's word; every update is checked against the app's signing key.
  */
-export function UpdateSettings() {
-  const [version, setVersion] = useState('');
+export function UpdateSettings({ checkNow = false }: { checkNow?: boolean }) {
   const [url, setUrl] = useState('');
+  const [more, setMore] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [auto, setAuto] = useState(false);
   const [last, setLast] = useState<string | null>(null);
   const [busy, setBusy] = useState<'' | 'check' | 'install'>('');
@@ -32,14 +33,14 @@ export function UpdateSettings() {
   const [progress, setProgress] = useState<number | null>(null);
 
   useEffect(() => {
-    void getVersion().then(setVersion).catch(() => {});
     invoke<{ url: string; auto: boolean; lastCheck?: string | null }>('api_update_settings')
       .then((s) => {
         setUrl(s.url);
         setAuto(s.auto);
         setLast(s.lastCheck ?? null);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setLoaded(true));
     // Found by the daily check: shown at once, ready to install
     invoke<Available | null>('api_update_found')
       .then((f) => f && setFound(f))
@@ -79,6 +80,16 @@ export function UpdateSettings() {
     }
   };
 
+  // «Протокол → Перевірити оновлення…» in the menu bar: check once the address is known
+  const checkedFromMenu = useRef(false);
+  useEffect(() => {
+    if (!checkNow || !loaded || checkedFromMenu.current) return;
+    checkedFromMenu.current = true;
+    if (url.trim()) void check();
+    else setMore(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkNow, loaded]);
+
   const install = async () => {
     if (!found) return;
     setBusy('install');
@@ -97,34 +108,33 @@ export function UpdateSettings() {
     }
   };
 
+  const lastText = last ? `Перевірено ${new Date(last).toLocaleString('uk-UA', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` : 'Ще не перевірялося';
   return (
     <SettingsGroup
       title="Оновлення"
-      help="Програма звертається лише за вказаною адресою і нічого про вас не надсилає. Кожне оновлення перевіряється підписом, тож ставиться лише справжнє."
+      help="Програма звертається лише за вказаною адресою і нічого про вас не надсилає. Кожне оновлення перевіряється підписом, тому встановлюється лише справжнє."
     >
-      <SettingsRow label={<span>Версія</span>}>
-        <span className="text-sm tabular-nums text-[color:var(--muted-text)]">{version}</span>
-      </SettingsRow>
       <SettingsRow
         label={
           <span className="flex flex-col min-w-0">
-            <span>Адреса оновлень</span>
-            <span className="text-xs text-[color:var(--muted-text)]">Посилання на latest.json від того, хто видає програму</span>
+            <span>{found ? `Доступна версія ${found.version}` : 'Перевірити оновлення'}</span>
+            <span className="text-xs text-[color:var(--muted-text)]">
+              {progress !== null ? `Завантаження… ${progress}%` : found?.notes ? found.notes.slice(0, 140) : lastText}
+            </span>
           </span>
         }
       >
-        <input
-          type="url"
-          className="h-8 px-2.5 w-[260px] max-w-full"
-          placeholder="https://…/latest.json"
-          value={url}
-          spellCheck={false}
-          onChange={(e) => setUrl(e.target.value)}
-          onBlur={() => void save()}
-          aria-label="Адреса оновлень"
-        />
+        {found ? (
+          <button type="button" className="accent-button h-8 rounded-lg px-3 text-sm font-medium" disabled={busy !== ''} onClick={() => void install()}>
+            {busy === 'install' ? 'Встановлення…' : 'Встановити'}
+          </button>
+        ) : (
+          <button type="button" className="settings-button" disabled={busy !== '' || !url.trim()} onClick={() => void check()}>
+            {busy === 'check' ? 'Перевірка…' : 'Перевірити зараз'}
+          </button>
+        )}
       </SettingsRow>
-      <SettingsRow label={<span>Перевіряти щодня</span>}>
+      <SettingsRow label={<span>Перевіряти оновлення щодня</span>}>
         <Switch
           checked={auto}
           disabled={!url.trim()}
@@ -135,40 +145,61 @@ export function UpdateSettings() {
           }}
         />
       </SettingsRow>
-      <SettingsRow
-        label={
-          <span className="flex flex-col min-w-0">
-            <span>{found ? `Є версія ${found.version}` : 'Перевірити оновлення'}</span>
-            <span className="text-xs text-[color:var(--muted-text)]">
-              {progress !== null ? `Завантаження… ${progress}%` : found?.notes ? found.notes.slice(0, 140) : last ? `Востаннє: ${new Date(last).toLocaleString('uk-UA')}` : 'Ще не перевіряли'}
-            </span>
-          </span>
-        }
+      <button
+        type="button"
+        className="settings-row w-full text-left hover:bg-[var(--hover)]"
+        aria-expanded={more}
+        onClick={() => setMore((m) => !m)}
       >
-        <div className="flex gap-2">
-          {found ? (
-            <button type="button" className="accent-button h-8 rounded-lg px-3 text-sm font-medium" disabled={busy !== ''} onClick={() => void install()}>
-              {busy === 'install' ? 'Встановлення…' : 'Встановити'}
-            </button>
-          ) : (
-            <button type="button" className="settings-button" disabled={busy !== '' || !url.trim()} onClick={() => void check()}>
-              {busy === 'check' ? 'Перевірка…' : 'Перевірити зараз'}
-            </button>
-          )}
-          <button
-            type="button"
-            className="settings-button"
-            disabled={busy !== ''}
-            title="Для мереж без інтернету: папка з latest.json і архівом оновлення"
-            onClick={async () => {
-              const folder = await invoke<string | null>('api_pick_folder', { title: 'Папка з оновленням' }).catch(() => null);
-              if (typeof folder === 'string') await check(folder);
-            }}
+        <span className="flex flex-col min-w-0">
+          <span>Додатково</span>
+          <span className="text-xs text-[color:var(--muted-text)]">Адреса оновлень, встановлення з папки без інтернету</span>
+        </span>
+        <ChevronRight className={`w-4 h-4 flex-none text-[color:var(--muted-text)] transition-transform ${more ? 'rotate-90' : ''}`} />
+      </button>
+      {more && (
+        <>
+          <SettingsRow
+            label={
+              <span className="flex flex-col min-w-0">
+                <span>Адреса оновлень</span>
+                <span className="text-xs text-[color:var(--muted-text)]">Посилання на latest.json від того, хто видає програму</span>
+              </span>
+            }
           >
-            З папки…
-          </button>
-        </div>
-      </SettingsRow>
+            <input
+              type="url"
+              className="h-8 px-2.5 w-[260px] max-w-full"
+              placeholder="https://…/latest.json"
+              value={url}
+              spellCheck={false}
+              onChange={(e) => setUrl(e.target.value)}
+              onBlur={() => void save()}
+              aria-label="Адреса оновлень"
+            />
+          </SettingsRow>
+          <SettingsRow
+            label={
+              <span className="flex flex-col min-w-0">
+                <span>Встановити з папки</span>
+                <span className="text-xs text-[color:var(--muted-text)]">Для мереж без інтернету: папка з latest.json і архівом оновлення</span>
+              </span>
+            }
+          >
+            <button
+              type="button"
+              className="settings-button"
+              disabled={busy !== ''}
+              onClick={async () => {
+                const folder = await invoke<string | null>('api_pick_folder', { title: 'Папка з оновленням' }).catch(() => null);
+                if (typeof folder === 'string') await check(folder);
+              }}
+            >
+              Вибрати папку…
+            </button>
+          </SettingsRow>
+        </>
+      )}
     </SettingsGroup>
   );
 }

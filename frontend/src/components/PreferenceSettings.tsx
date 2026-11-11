@@ -8,19 +8,19 @@ import Analytics from "@/lib/analytics"
 import { SettingsGroup, SettingsRow } from "./settings/SettingsGroup"
 import { clickPlaysWord, setClickPlaysWord } from "@/lib/clickWord"
 import { WORD_HIGHLIGHT_EVENT } from "@/lib/lineTimes"
-import { UpdateSettings } from "./settings/UpdateSettings"
+import { RecordingSettings } from "./RecordingSettings"
 import { importModelsFromFolder } from "@/lib/importModels"
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext"
 
 /** «Підсвічувати кожне слово»: the default depends on the Mac's memory; the choice is kept */
-function ClickWordRow() {
+export function ClickWordRow() {
   const [on, setOn] = useState(true)
   useEffect(() => setOn(clickPlaysWord()), [])
   return (
     <SettingsRow
       label={
         <span className="flex flex-col min-w-0">
-          <span>Клік по слову — прослухати</span>
+          <span>Прослуховувати слово за кліком</span>
           <span className="text-xs text-[color:var(--muted-text)]">Звучить саме це слово голосом того, хто його сказав. Вимкніть, щоб клік лише ставив курсор і переводив запис на це місце.</span>
         </span>
       }
@@ -31,13 +31,13 @@ function ClickWordRow() {
           setOn(v)
           setClickPlaysWord(v)
         }}
-        aria-label="Клік по слову — прослухати"
+        aria-label="Прослуховувати слово за кліком"
       />
     </SettingsRow>
   )
 }
 
-function WordHighlightRow() {
+export function WordHighlightRow() {
   const [on, setOn] = useState<boolean | null>(null)
   useEffect(() => {
     invoke<boolean>("api_get_word_highlight").then(setOn).catch(() => setOn(null))
@@ -167,29 +167,6 @@ export function PreferenceSettings() {
     handleUpdateNotificationSettings();
   }, [notificationsEnabled, notificationSettings, isInitialLoad, previousNotificationsEnabled, updateNotificationSettings])
 
-  const handleOpenFolder = async (folderType: 'database' | 'models' | 'recordings') => {
-    try {
-      switch (folderType) {
-        case 'database':
-          await invoke('open_database_folder');
-          break;
-        case 'models':
-          await invoke('open_models_folder');
-          break;
-        case 'recordings':
-          await invoke('open_recordings_folder');
-          break;
-      }
-
-      // Track storage folder access
-      await Analytics.track('storage_folder_opened', {
-        folder_type: folderType
-      });
-    } catch (error) {
-      console.error(`Failed to open ${folderType} folder:`, error);
-    }
-  };
-
   // Show loading only if we're actually loading and don't have cached data
   if (isLoadingPreferences && !notificationSettings && !storageLocations) {
     return <div className="max-w-2xl mx-auto p-6">Завантаження…</div>
@@ -205,49 +182,29 @@ export function PreferenceSettings() {
 
   return (
     <div className="flex flex-col gap-6">
-      <SettingsGroup title="Стенограма">
-        <WordHighlightRow />
-        <ClickWordRow />
-      </SettingsGroup>
-
-      <UpdateSettings />
-
       <SettingsGroup title="Сповіщення">
         <SettingsRow label="Сповіщати про початок і завершення запису">
           <Switch checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />
         </SettingsRow>
       </SettingsGroup>
 
+      <RecordingSettings part="storage" />
+
       <SettingsGroup
-        title="Дані"
-        help="База даних і моделі зберігаються разом у папці даних застосунку."
+        title="Моделі"
+        help="База даних і моделі зберігаються разом у папці даних програми."
       >
         <SettingsRow
           label={
             <span className="flex flex-col min-w-0">
-              <span>Папка записів</span>
-              <span className="text-xs text-[color:var(--muted-text)] truncate" title={storageLocations?.recordings}>
-                {storageLocations?.recordings || 'Завантаження…'}
-              </span>
-            </span>
-          }
-        >
-          <button type="button" onClick={() => handleOpenFolder('recordings')} className="settings-button">
-            <FolderOpen className="w-3.5 h-3.5" />
-            Відкрити
-          </button>
-        </SettingsRow>
-        <SettingsRow
-          label={
-            <span className="flex flex-col min-w-0">
-              <span>Моделі з папки</span>
-              <span className="text-xs text-[color:var(--muted-text)]">Для Mac без інтернету: моделі з флешки чи спільної папки</span>
+              <span>Встановити моделі з папки</span>
+              <span className="text-xs text-[color:var(--muted-text)]">Для Mac без інтернету: моделі з флешки або спільної папки</span>
             </span>
           }
         >
           <button type="button" onClick={() => void importModelsFromFolder()} className="settings-button">
             <FolderOpen className="w-3.5 h-3.5" />
-            Вибрати…
+            Вибрати папку…
           </button>
         </SettingsRow>
       </SettingsGroup>

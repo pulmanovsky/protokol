@@ -615,6 +615,16 @@ export default function PageContent({
     window.addEventListener(TIME_CLICKED_EVENT, onTime);
     return () => window.removeEventListener(TIME_CLICKED_EVENT, onTime);
   });
+  // Вигляд → Стенограма ⌘1 / Документ ⌘2 in the menu bar
+  useEffect(() => {
+    const onMenu = (e: Event) => {
+      const action = (e as CustomEvent<string>).detail;
+      if (action === 'tab-transcript') setActiveTab('transcript');
+      else if (action === 'tab-document') setActiveTab('summary');
+    };
+    window.addEventListener('protokol:menu', onMenu);
+    return () => window.removeEventListener('protokol:menu', onMenu);
+  });
   // Space plays or pauses, ←/→ move 5 seconds (not while typing)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

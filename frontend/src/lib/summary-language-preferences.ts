@@ -31,12 +31,9 @@ export interface SummaryLanguageDetectionResult {
 }
 
 export function readPinnedSummaryLanguageDefault(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    return normaliseLanguageCode(window.localStorage.getItem(SUMMARY_LANGUAGE_DEFAULT_KEY));
-  } catch {
-    return null;
-  }
+  // The «Мова підсумку» setting is gone (documents are Ukrainian; a meeting's language is
+  // still chosen in its «Документ» tab), so a default pinned by an earlier version is ignored.
+  return null;
 }
 
 export function writePinnedSummaryLanguageDefault(value: string | null): void {

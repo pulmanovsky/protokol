@@ -55,21 +55,8 @@ export type BetaFeatureKey = keyof BetaFeatures;
  * @returns BetaFeatures object with values from localStorage or defaults
  */
 export function loadBetaFeatures(): BetaFeatures {
-  if (typeof window === 'undefined') {
-    return { ...DEFAULT_BETA_FEATURES };
-  }
-
-  try {
-    const saved = localStorage.getItem('betaFeatures');
-    if (saved) {
-      const parsed = JSON.parse(saved) as Partial<BetaFeatures>;
-      // Merge with defaults to handle missing keys (graceful degradation)
-      return { ...DEFAULT_BETA_FEATURES, ...parsed };
-    }
-  } catch (error) {
-    console.error('[BetaFeatures] Failed to load from localStorage:', error);
-  }
-
+  // Import and re-transcription are regular features now: the old switch in
+  // «Експериментальне» is gone, so a saved «off» from earlier versions is ignored.
   return { ...DEFAULT_BETA_FEATURES };
 }
 

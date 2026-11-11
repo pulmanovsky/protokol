@@ -10,6 +10,7 @@ import { plural } from '@/lib/plural';
 import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { SettingsGroup, SettingsRow } from '@/components/settings/SettingsGroup';
+import { useConfig } from '@/contexts/ConfigContext';
 import {
   DocumentTemplate,
   MAIN_TEMPLATE_DEFAULT,
@@ -69,6 +70,22 @@ export function DocumentTemplatesSettings() {
   const [form, setForm] = useState<TemplateForm | null>(null);
   const [main, setMain] = useState(MAIN_TEMPLATE_DEFAULT);
   const [byHour, setByHour] = useState(true);
+  // One switch for the automatic document (the old «підсумок одразу після запису» switch is folded into it)
+  const { toggleIsAutoSummary } = useConfig();
+  const [autoDocument, setAutoDocument] = useState(false);
+  useEffect(() => {
+    invoke<boolean>('get_auto_document').then(setAutoDocument).catch(() => {});
+  }, []);
+  const changeAutoDocument = async (enabled: boolean) => {
+    setAutoDocument(enabled);
+    try {
+      await invoke('set_auto_document', { enabled });
+      toggleIsAutoSummary(false);
+    } catch {
+      setAutoDocument(!enabled);
+      toast.error('Не вдалося зберегти налаштування');
+    }
+  };
   const searchParams = useSearchParams();
 
   const load = useCallback(async () => {
@@ -123,7 +140,50 @@ export function DocumentTemplatesSettings() {
 
   return (
     <div className="flex flex-col gap-5">
+      <SettingsGroup
+        title="Створення"
+        help="Документ створюється на цьому Mac за основним шаблоном. Для ранкового запису пропонується шаблон попереднього ранкового."
+      >
+        <SettingsRow
+          label={
+            <span className="flex flex-col min-w-0">
+              <span>Створювати документ автоматично</span>
+              <span className="text-xs text-[color:var(--muted-text)]">Після запису та розпізнавання спікерів</span>
+            </span>
+          }
+        >
+          <Switch checked={autoDocument} onCheckedChange={(on) => void changeAutoDocument(on)} aria-label="Створювати документ автоматично" />
+        </SettingsRow>
+        <SettingsRow label="Основний шаблон" htmlFor="main-template">
+          <select
+            id="main-template"
+            className="h-7 px-2 text-[13px] max-w-[240px]"
+            value={templates.some((t) => t.id === main) ? main : MAIN_TEMPLATE_DEFAULT}
+            onChange={(e) => {
+              setMain(e.target.value);
+              setMainTemplate(e.target.value);
+            }}
+          >
+            {templates.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </SettingsRow>
+        <SettingsRow label="Пропонувати шаблон за часом дня">
+          <Switch
+            checked={byHour}
+            onCheckedChange={(on) => {
+              setByHour(on);
+              setRemembersByHour(on);
+            }}
+          />
+        </SettingsRow>
+      </SettingsGroup>
+
       <section className="flex flex-col gap-1.5">
+        <h3 className="settings-group-title">Шаблони</h3>
         <p className="settings-help !mt-0 !mb-1">
           Шаблон визначає, що буде в документі. Вибрати його можна у вкладці «Документ» кожного запису.
         </p>
@@ -151,39 +211,11 @@ export function DocumentTemplatesSettings() {
             <Plus className="w-3.5 h-3.5" /> Новий шаблон
           </button>
           <button type="button" className="settings-button" title="Файл .json із шаблонами (а також словником вашої організації)" onClick={() => void importFile()}>
-            <FileDown className="w-3.5 h-3.5" /> Імпорт із файлу
+            <FileDown className="w-3.5 h-3.5" /> Імпортувати…
           </button>
         </div>
       </section>
 
-      <SettingsGroup help="Для ранкового запису пропонується шаблон попереднього ранкового.">
-        <SettingsRow label="Основний шаблон" htmlFor="main-template">
-          <select
-            id="main-template"
-            className="h-7 px-2 text-[13px] max-w-[240px]"
-            value={templates.some((t) => t.id === main) ? main : MAIN_TEMPLATE_DEFAULT}
-            onChange={(e) => {
-              setMain(e.target.value);
-              setMainTemplate(e.target.value);
-            }}
-          >
-            {templates.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-        </SettingsRow>
-        <SettingsRow label="Пам'ятати вибір за часом дня">
-          <Switch
-            checked={byHour}
-            onCheckedChange={(on) => {
-              setByHour(on);
-              setRemembersByHour(on);
-            }}
-          />
-        </SettingsRow>
-      </SettingsGroup>
 
       {form && (
         <TemplateEditor

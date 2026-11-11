@@ -22,6 +22,8 @@ import { DownloadProgressToastProvider } from '@/components/shared/DownloadProgr
 import { RecordingPostProcessingProvider } from '@/contexts/RecordingPostProcessingProvider'
 import { ImportAudioDialog, ImportDropOverlay } from '@/components/ImportAudio'
 import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
+import { MenuBridge } from '@/components/MenuBridge'
+import { FeedbackDialog } from '@/components/FeedbackDialog'
 import { CalendarReminder } from '@/components/CalendarReminder'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
 import { ThemeProvider, themeBootScript } from '@/contexts/ThemeContext'
@@ -308,6 +310,8 @@ function MainLayout({
                               {/* Download progress toast provider - listens for background downloads */}
                               <DownloadProgressToastProvider />
                               <NoticeLayer onboarding={showOnboarding} />
+                              <MenuBridge />
+                              <FeedbackDialog />
 
                               {/* Show onboarding or main app */}
                               {showOnboarding ? (

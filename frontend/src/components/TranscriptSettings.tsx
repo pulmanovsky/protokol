@@ -99,9 +99,9 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
     return (
         <SettingsGroup
             title="Розпізнавання мовлення"
-            help="Розпізнавання працює на цьому Mac. Мова — українська, а словник із «Шаблонів і словника» підказує правильне написання імен і термінів."
+            help="Розпізнавання працює на цьому Mac. Мова — українська, а слова зі «Словника» підказують правильне написання імен і термінів."
         >
-            <SettingsRow label="Рушій">
+            <SettingsRow label="Модель розпізнавання">
                         <div className="flex gap-2 w-[300px]">
                             <Select
                                 value={uiProvider}

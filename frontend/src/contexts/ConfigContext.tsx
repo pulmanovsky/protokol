@@ -343,6 +343,15 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  // The old «Створювати підсумок одразу після завершення запису» switch is folded into
+  // «Створювати документ автоматично» (Settings → Документ): carry an «on» over once.
+  useEffect(() => {
+    if (!isAutoSummary) return;
+    invoke('set_auto_document', { enabled: true })
+      .then(() => toggleIsAutoSummary(false))
+      .catch(() => {});
+  }, [isAutoSummary, toggleIsAutoSummary]);
+
   // Toggle beta feature with localStorage persistence and analytics
   const toggleBetaFeature = useCallback((featureKey: BetaFeatureKey, enabled: boolean) => {
     setBetaFeatures(prev => {

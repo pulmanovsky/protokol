@@ -1,34 +1,39 @@
 //! The macOS menu bar, in Ukrainian and in the order Mac apps have: the
-//! app's own menu (About, Settings ⌘,, Hide, Quit), File, Edit (the system's
-//! own Undo/Redo/Cut/Copy/Paste, so they work in every text field and ⌘Z still
-//! reaches the transcript's history), Window and Help.
+//! app's own menu (About, Check for Updates, Settings ⌘,, Hide, Quit), File,
+//! Edit (the system's own Undo/Redo/Cut/Copy/Paste, so they work in every text
+//! field and ⌘Z still reaches the transcript's history), Recording (as Music's
+//! Controls), View, Window and Help. The app's name is declined as Apple does
+//! («Вийти з Нотаток»): «Сховати Протокол», «Вийти з Протоколу».
 
-use tauri::menu::{AboutMetadata, Menu, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::{AppHandle, Manager, Runtime};
 
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
-    let version = app.package_info().version.to_string();
-    let about = AboutMetadata {
-        name: Some("Протокол".into()),
-        version: Some(version),
-        comments: Some("Стенограма та документ із запису розмови. Усе на цьому Mac.".into()),
-        ..Default::default()
+    let item = |id: &str, text: &str, key: Option<&str>| {
+        let b = MenuItemBuilder::with_id(id, text);
+        match key {
+            Some(k) => b.accelerator(k).build(app),
+            None => b.build(app),
+        }
     };
     let app_menu = SubmenuBuilder::new(app, "Протокол")
-        .item(&PredefinedMenuItem::about(app, Some("Про «Протокол»"), Some(about))?)
+        .item(&item("menu_about", "Про Протокол", None)?)
+        .item(&item("menu_check_updates", "Перевірити оновлення…", None)?)
         .separator()
-        .item(&MenuItemBuilder::with_id("menu_settings", "Налаштування…").accelerator("CmdOrCtrl+,").build(app)?)
+        .item(&item("menu_settings", "Налаштування…", Some("CmdOrCtrl+,"))?)
         .separator()
         .item(&PredefinedMenuItem::services(app, Some("Служби"))?)
         .separator()
-        .item(&PredefinedMenuItem::hide(app, Some("Сховати «Протокол»"))?)
+        .item(&PredefinedMenuItem::hide(app, Some("Сховати Протокол"))?)
         .item(&PredefinedMenuItem::hide_others(app, Some("Сховати інші"))?)
         .item(&PredefinedMenuItem::show_all(app, Some("Показати всі"))?)
         .separator()
-        .item(&PredefinedMenuItem::quit(app, Some("Вийти з «Протокол»"))?)
+        .item(&PredefinedMenuItem::quit(app, Some("Вийти з Протоколу"))?)
         .build()?;
     let file = SubmenuBuilder::new(app, "Файл")
-        .item(&MenuItemBuilder::with_id("menu_import", "Імпортувати аудіо…").accelerator("CmdOrCtrl+O").build(app)?)
+        .item(&item("menu_import", "Імпортувати аудіо…", Some("CmdOrCtrl+O"))?)
+        .separator()
+        .item(&item("menu_export", "Експортувати документ…", Some("CmdOrCtrl+Shift+E"))?)
         .separator()
         .item(&PredefinedMenuItem::close_window(app, Some("Закрити вікно"))?)
         .build()?;
@@ -40,27 +45,110 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&PredefinedMenuItem::copy(app, Some("Копіювати"))?)
         .item(&PredefinedMenuItem::paste(app, Some("Вставити"))?)
         .item(&PredefinedMenuItem::select_all(app, Some("Вибрати все"))?)
+        .separator()
+        .item(&item("menu_find", "Знайти…", Some("CmdOrCtrl+F"))?)
+        .build()?;
+    let recording = SubmenuBuilder::new(app, "Запис")
+        .item(&item("menu_record_new", "Новий запис", Some("CmdOrCtrl+N"))?)
+        .item(&item("menu_record_pause", "Пауза або продовження", None)?)
+        .item(&item("menu_record_stop", "Завершити запис", None)?)
+        .separator()
+        .item(&item("menu_mic", "Вимкнути або увімкнути мікрофон", Some("CmdOrCtrl+Shift+M"))?)
+        .build()?;
+    let view = SubmenuBuilder::new(app, "Вигляд")
+        .item(&item("menu_sidebar", "Показати або сховати бічну панель", Some("Cmd+Ctrl+S"))?)
+        .separator()
+        .item(&item("menu_tab_transcript", "Стенограма", Some("CmdOrCtrl+1"))?)
+        .item(&item("menu_tab_document", "Документ", Some("CmdOrCtrl+2"))?)
+        .separator()
+        .item(&PredefinedMenuItem::fullscreen(app, Some("На весь екран"))?)
         .build()?;
     let window = SubmenuBuilder::new(app, "Вікно")
         .item(&PredefinedMenuItem::minimize(app, Some("Згорнути"))?)
         .item(&PredefinedMenuItem::maximize(app, Some("Масштабувати"))?)
-        .item(&PredefinedMenuItem::fullscreen(app, Some("На весь екран"))?)
         .build()?;
     let help = SubmenuBuilder::new(app, "Довідка")
-        .item(&MenuItemBuilder::with_id("menu_help", "Про «Протокол» і приватність").build(app)?)
+        .item(&item("menu_privacy", "Приватність і дані", None)?)
+        .separator()
+        .item(&item("menu_report", "Повідомити про проблему…", None)?)
+        .item(&item("menu_suggest", "Запропонувати покращення…", None)?)
+        .separator()
+        .item(&item("menu_github", "Сторінка проєкту на GitHub", None)?)
         .build()?;
-    Menu::with_items(app, &[&app_menu, &file, &edit, &window, &help])
+    Menu::with_items(app, &[&app_menu, &file, &edit, &recording, &view, &window, &help])
 }
+
+const PROJECT: &str = "https://github.com/pulmanovsky/protokol";
 
 /// What the menu's own items do (the system's items work by themselves)
 pub fn on_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
+    // Recording: the same paths as the menu bar icon
+    match id {
+        "menu_record_new" => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if !crate::is_recording().await {
+                    crate::tray::handle_menu_event(&app, "toggle_recording");
+                } else if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            });
+            return;
+        }
+        "menu_record_pause" => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if !crate::is_recording().await {
+                    return;
+                }
+                let paused = crate::audio::recording_commands::is_recording_paused().await;
+                crate::tray::handle_menu_event(&app, if paused { "resume_recording" } else { "pause_recording" });
+            });
+            return;
+        }
+        "menu_record_stop" => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if crate::is_recording().await {
+                    crate::tray::handle_menu_event(&app, "stop_recording");
+                }
+            });
+            return;
+        }
+        "menu_mic" => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if !crate::is_recording().await {
+                    return;
+                }
+                let muted = crate::audio::recording_commands::get_mic_muted().await;
+                let _ = crate::audio::recording_commands::set_mic_muted(app, !muted).await;
+            });
+            return;
+        }
+        "menu_privacy" | "menu_github" => {
+            let url = if id == "menu_github" { PROJECT.to_string() } else { format!("{PROJECT}/blob/main/PRIVACY_POLICY.md") };
+            let _ = std::process::Command::new("open").arg(url).spawn();
+            return;
+        }
+        _ => {}
+    }
     let Some(window) = app.get_webview_window("main") else { return };
     let _ = window.show();
     let _ = window.set_focus();
     let js = match id {
         "menu_settings" => "window.location.assign('/settings')",
-        "menu_help" => "window.location.assign('/settings?section=about')",
+        "menu_about" => "window.location.assign('/settings?section=about')",
+        "menu_check_updates" => "window.location.assign('/settings?section=about&check=1')",
         "menu_import" => "window.dispatchEvent(new CustomEvent('protokol:menu-import'))",
+        "menu_report" => "window.dispatchEvent(new CustomEvent('protokol:feedback', { detail: 'problem' }))",
+        "menu_suggest" => "window.dispatchEvent(new CustomEvent('protokol:feedback', { detail: 'idea' }))",
+        "menu_export" => "window.dispatchEvent(new CustomEvent('protokol:menu', { detail: 'export' }))",
+        "menu_find" => "window.dispatchEvent(new CustomEvent('protokol:menu', { detail: 'find' }))",
+        "menu_sidebar" => "window.dispatchEvent(new CustomEvent('protokol:menu', { detail: 'sidebar' }))",
+        "menu_tab_transcript" => "window.dispatchEvent(new CustomEvent('protokol:menu', { detail: 'tab-transcript' }))",
+        "menu_tab_document" => "window.dispatchEvent(new CustomEvent('protokol:menu', { detail: 'tab-document' }))",
         _ => return,
     };
     let _ = window.eval(js);

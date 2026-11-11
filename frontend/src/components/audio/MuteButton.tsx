@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect } from 'react';
 import { Mic, MicOff } from 'lucide-react';
 
 interface MuteButtonProps {
@@ -14,17 +13,8 @@ interface MuteButtonProps {
 
 /** In-app microphone mute: the stream stays open, our pipeline writes silence */
 export function MuteButton({ muted, onToggle, disabled = false, withShortcut = false, compact = false }: MuteButtonProps) {
-  useEffect(() => {
-    if (!withShortcut || disabled) return;
-    const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'm') {
-        event.preventDefault();
-        onToggle();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [withShortcut, disabled, onToggle]);
+  // ⇧⌘M is the menu bar's «Запис → Вимкнути або увімкнути мікрофон» (a key handler here would toggle twice)
+  void withShortcut;
 
   const label = muted ? 'Увімкнути мікрофон' : 'Вимкнути мікрофон';
   return (
@@ -33,8 +23,8 @@ export function MuteButton({ muted, onToggle, disabled = false, withShortcut = f
       onClick={onToggle}
       disabled={disabled}
       aria-pressed={muted}
-      aria-label={`${label} (⌘⇧M)`}
-      title={`${label} (⌘⇧M)`}
+      aria-label={`${label} (⇧⌘M)`}
+      title={`${label} (⇧⌘M)`}
       className={`inline-flex items-center justify-center gap-2 rounded-full font-semibold transition-colors disabled:opacity-50 ${
         compact ? 'h-8 px-3 text-[13px]' : 'h-10 px-4 text-sm'
       } ${

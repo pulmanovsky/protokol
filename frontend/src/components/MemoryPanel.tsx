@@ -49,6 +49,14 @@ export function MemoryPanel({ version, onChanged }: { version: number; onChanged
   const [all, setAll] = useState<Summary | null>(null);
   // «Переглянути всіх»: the people the app knows
   const [peopleOpen, setPeopleOpen] = useState(false);
+  // Settings → Стенограма → «Збережені спікери» opens the list right away
+  useEffect(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get('people') === '1') setPeopleOpen(true);
+    } catch {
+      // stays closed
+    }
+  }, []);
 
   const load = useCallback(() => {
     invoke<Correction[]>('api_corrections').then(setCorrections).catch(() => setCorrections([]));

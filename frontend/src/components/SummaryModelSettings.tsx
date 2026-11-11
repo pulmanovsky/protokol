@@ -4,10 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from '@/lib/notice';
 import { ModelConfig, ModelSettingsModal } from '@/components/ModelSettingsModal';
-import { SummaryLanguageSettings } from '@/components/SummaryLanguageSettings';
-import { SettingsGroup, SettingsRow, SettingsBlock } from '@/components/settings/SettingsGroup';
-import { Switch } from './ui/switch';
-import { useConfig } from '@/contexts/ConfigContext';
+import { SettingsGroup, SettingsBlock } from '@/components/settings/SettingsGroup';
 
 interface SummaryModelSettingsProps {
   refetchTrigger?: number; // Change this to trigger refetch
@@ -21,8 +18,6 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
     apiKey: null,
     ollamaEndpoint: null
   });
-
-  const { isAutoSummary, toggleIsAutoSummary } = useConfig();
 
   // Reusable fetch function
   const fetchModelConfig = useCallback(async () => {
@@ -114,17 +109,8 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
 
   return (
     <div className='flex flex-col gap-6'>
-
-      <SettingsGroup>
-        <SettingsRow label="Створювати підсумок одразу після завершення запису">
-          <Switch checked={isAutoSummary} onCheckedChange={toggleIsAutoSummary} />
-        </SettingsRow>
-      </SettingsGroup>
-
-      <SummaryLanguageSettings />
-
       <SettingsGroup
-        title="Модель для підсумку"
+        title="Модель для документа"
         help="Модель працює на цьому Mac. Стенограма нікуди не надсилається."
       >
         <SettingsBlock>
