@@ -132,6 +132,25 @@ export function RecordingSettings({ onSave, part = 'recording' }: RecordingSetti
     }
   };
 
+  // «Змінити…»: new recordings and imports go to the chosen folder; existing ones stay where they are
+  const handleChooseFolder = async () => {
+    const folder = await invoke<string | null>('api_pick_folder', { title: 'Папка для записів' }).catch(() => null);
+    if (typeof folder !== 'string' || folder === preferences.save_folder) return;
+    const newPreferences = { ...preferences, save_folder: folder };
+    setPreferences(newPreferences);
+    setSaving(true);
+    try {
+      await invoke('set_recording_preferences', { preferences: newPreferences });
+      onSave?.(newPreferences);
+      toast.success('Папку записів змінено', { description: 'Нові записи зберігатимуться в ній. Наявні записи залишаються на своєму місці.' });
+    } catch (error) {
+      setPreferences(preferences);
+      toast.error('Не вдалося вибрати цю папку', { description: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleNotificationToggle = async (enabled: boolean) => {
     try {
       setShowRecordingNotification(enabled);
@@ -187,7 +206,7 @@ export function RecordingSettings({ onSave, part = 'recording' }: RecordingSetti
         title="Сховище"
         help={
           preferences.auto_save
-            ? 'Кожен запис зберігається в окремій папці зі звуком, названій за датою та часом.'
+            ? 'Кожен запис зберігається в окремій папці зі звуком, названій за датою та часом. Після зміни папки нові записи зберігаються в новій, наявні залишаються на своєму місці.'
             : 'Аудіо не зберігається: залишаються лише стенограма та документ.'
         }
       >
@@ -205,6 +224,9 @@ export function RecordingSettings({ onSave, part = 'recording' }: RecordingSetti
               </span>
             }
           >
+            <button type="button" onClick={() => void handleChooseFolder()} disabled={saving || isRecording} className="settings-button">
+              Змінити…
+            </button>
             <button type="button" onClick={handleOpenFolder} className="settings-button">
               <FolderOpen className="w-3.5 h-3.5" />
               Показати у Finder

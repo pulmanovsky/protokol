@@ -435,6 +435,13 @@ pub fn run() {
         .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
         .setup(|_app| {
             learned_events::init(_app.handle());
+            // The recordings folder chosen in Settings, for the recorder and the import
+            {
+                let handle = _app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = audio::recording_preferences::load_recording_preferences(&handle).await;
+                });
+            }
             // The menu bar, as Mac apps have it
             #[cfg(target_os = "macos")]
             match app_menu::build(_app.handle()) {

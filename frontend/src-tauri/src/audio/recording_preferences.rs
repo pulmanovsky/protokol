@@ -79,6 +79,31 @@ fn default_recordings_parent() -> PathBuf {
     }
 }
 
+/// The folder chosen in Settings → Загальні → Сховище (None: the default).
+/// Kept in memory so the recorder and the import, which have no app handle,
+/// save new recordings there; set whenever the preferences are read or saved.
+static CHOSEN_FOLDER: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+fn remember_folder(folder: &PathBuf) {
+    let chosen = (folder.as_os_str().len() > 0 && *folder != get_default_recordings_folder()).then(|| folder.clone());
+    if let Ok(mut f) = CHOSEN_FOLDER.write() {
+        *f = chosen;
+    }
+}
+
+/// Where new recordings and imports go: the chosen folder when it can be used
+/// (an unplugged disk falls back to the default, so a recording is never lost)
+pub fn recordings_folder() -> PathBuf {
+    let chosen = CHOSEN_FOLDER.read().ok().and_then(|f| f.clone());
+    if let Some(folder) = chosen {
+        match ensure_recordings_directory(&folder) {
+            Ok(()) => return folder,
+            Err(e) => warn!("Chosen recordings folder {:?} can't be used ({}); saving to the default folder", folder, e),
+        }
+    }
+    get_default_recordings_folder()
+}
+
 /// Ensure the recordings directory exists
 pub fn ensure_recordings_directory(path: &PathBuf) -> Result<()> {
     if !path.exists() {
@@ -134,6 +159,7 @@ pub async fn load_recording_preferences<R: Runtime>(
     info!("Loaded recording preferences: save_folder={:?}, auto_save={}, format={}, mic={:?}, system={:?}",
           prefs.save_folder, prefs.auto_save, prefs.file_format,
           prefs.preferred_mic_device, prefs.preferred_system_device);
+    remember_folder(&prefs.save_folder);
     Ok(prefs)
 }
 
@@ -176,6 +202,7 @@ pub async fn save_recording_preferences<R: Runtime>(
 
     // Ensure the directory exists
     ensure_recordings_directory(&preferences.save_folder)?;
+    remember_folder(&preferences.save_folder);
 
     Ok(())
 }
