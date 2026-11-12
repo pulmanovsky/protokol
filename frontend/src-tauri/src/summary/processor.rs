@@ -1118,6 +1118,8 @@ async fn speaker_blocks_document(
         }
         let said = super::numbers::Said::of(&block.lines.iter().map(|l| l.1.as_str()).collect::<Vec<_>>().join(" "));
         let (whole, kept) = materials::keep_numbers(&materials::clean_points(&written.join("\n")), &working);
+        // In the order it was said (a point from the middle of a report stays in the middle)
+        let whole = materials::in_said_order(&whole);
         numbers.appended += kept.appended;
         numbers.added += kept.added;
         numbers.left += kept.left;

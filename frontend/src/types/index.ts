@@ -20,6 +20,7 @@ export interface Transcript {
   edited?: boolean;           // Corrected by hand (the recognised text is kept to undo)
   speaker_manual?: boolean;   // The speaker was set by hand («змінено вручну»)
   reviewed?: boolean;         // Marked «перевірено»
+  excluded?: boolean;         // Left out of the document («Не включати в документ»)
 }
 
 export interface TranscriptUpdate {

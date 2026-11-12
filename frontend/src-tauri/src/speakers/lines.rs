@@ -373,6 +373,40 @@ pub async fn set_reviewed(pool: &SqlitePool, meeting_id: &str, segment_ids: &[St
     Ok(())
 }
 
+/// Lines left out of the document («Не включати в документ»), or taken back
+/// in: kept by time, like the checks, for a new recognition
+pub async fn set_excluded(pool: &SqlitePool, meeting_id: &str, segment_ids: &[String], excluded: bool) -> Result<()> {
+    let rows = rows_of(pool, meeting_id).await?;
+    let now = chrono::Utc::now().to_rfc3339();
+    for id in segment_ids {
+        let Some(r) = rows.iter().find(|r| &r.0 == id) else { continue };
+        sqlx::query("DELETE FROM segment_exclusions WHERE meeting_id = ? AND start < ? AND end > ?").bind(meeting_id).bind(r.3.max(r.2 + 0.01)).bind(r.2).execute(pool).await?;
+        if excluded {
+            sqlx::query("INSERT INTO segment_exclusions (meeting_id, start, end, created_at) VALUES (?, ?, ?, ?)").bind(meeting_id).bind(r.2).bind(r.3).bind(&now).execute(pool).await?;
+        }
+    }
+    Ok(())
+}
+
+/// The lines of a meeting left out of the document: half of a line or more
+/// under a span left out
+pub async fn excluded_ids(pool: &SqlitePool, meeting_id: &str) -> Result<std::collections::HashSet<String>> {
+    let spans: Vec<(f64, f64)> = sqlx::query_as("SELECT start, end FROM segment_exclusions WHERE meeting_id = ?").bind(meeting_id).fetch_all(pool).await?;
+    if spans.is_empty() {
+        return Ok(Default::default());
+    }
+    Ok(rows_of(pool, meeting_id)
+        .await?
+        .into_iter()
+        .filter(|(_, _, a, b, _)| {
+            let length = (b - a).max(0.01);
+            let covered: f64 = spans.iter().map(|(s, e)| (b.min(*e) - a.max(*s)).max(0.0)).sum();
+            covered >= length / 2.0 || (b - a < 0.01 && spans.iter().any(|(s, e)| *s <= *a && *a <= *e))
+        })
+        .map(|r| r.0)
+        .collect())
+}
+
 /// Every line not yet checked counts as checked
 pub async fn mark_all_reviewed(pool: &SqlitePool, meeting_id: &str) -> Result<()> {
     let open: Vec<String> = sqlx::query_scalar("SELECT id FROM transcripts WHERE meeting_id = ? AND reviewed_at IS NULL").bind(meeting_id).fetch_all(pool).await?;
@@ -837,6 +871,14 @@ pub async fn set_segments_reviewed<R: tauri::Runtime>(app: tauri::AppHandle<R>, 
     let label = if reviewed { "позначка «перевірено»" } else { "зняття позначки «перевірено»" };
     crate::speakers::journal::journaled(&pool, &meeting_id, label, || async { set_reviewed(&pool, &meeting_id, &segment_ids, reviewed).await.map_err(|e| e.to_string()) }).await?;
     progress(&pool, &meeting_id).await.map_err(|e| e.to_string())
+}
+
+/// «Не включати в документ» / «Включати в документ»: one step of the history
+#[tauri::command]
+pub async fn set_segments_excluded<R: tauri::Runtime>(app: tauri::AppHandle<R>, meeting_id: String, segment_ids: Vec<String>, excluded: bool) -> Result<(), String> {
+    let pool = super::commands::pool(&app).map_err(|e| e.to_string())?;
+    let label = if excluded { "рядок не включено в документ" } else { "рядок знову включено в документ" };
+    crate::speakers::journal::journaled(&pool, &meeting_id, label, || async { set_excluded(&pool, &meeting_id, &segment_ids, excluded).await.map_err(|e| e.to_string()) }).await
 }
 
 /// «Позначити все перевіреним»: one step of the history

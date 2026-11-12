@@ -1155,12 +1155,46 @@ fn is_service_remark(sentence: &str) -> bool {
     if t.contains("якісь питання") || t.contains("є питання") || ((t.starts_with("пане ") || t.starts_with("панове")) && words <= 3) {
         return true;
     }
-    words <= 2 && !digits
+    // A word or two alone: only an answer like «Так.» or «Зрозумів.» is
+    // nothing for the minutes; «Втрат немає.» or «Орієнтир Дотик.» is the report
+    const REPLIES: &[&str] = &[
+        "так", "ні", "добре", "гаразд", "зрозумів", "зрозуміла", "зрозуміло", "прийняв", "прийняла", "прийнято", "є", "слухаю", "ок", "окей", "ага", "угу", "ясно", "все", "дякую",
+        "дуже", "вас", "тебе", "мене", "чути", "чую", "колеги", "панове", "пане", "вітаю", "привіт", "отже", "значить", "наступний", "далі",
+    ];
+    words <= 2 && !digits && t.split_whitespace().all(|w| REPLIES.contains(&w.trim_matches(|c: char| !c.is_alphanumeric())))
 }
 
+/// Swearing: words that begin with a rude stem (not a stem inside a word:
+/// «кораблями» and «рублями» are fine)
 fn is_rude(text: &str) -> bool {
-    let t = text.to_lowercase();
-    ["їбе", "їба", "проїб", "бля", "хуй", "хує", "пизд", "нахер", "нахуй", "сука"].iter().any(|x| t.contains(x))
+    const STEMS: &[&str] = &["їба", "їбе", "їбу", "проїб", "заїб", "виїб", "наїб", "бля", "хуй", "хує", "хуї", "пизд", "нахер", "нахуй", "сука", "суки"];
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’')
+        .any(|w| STEMS.iter().any(|x| w.starts_with(x)) || w.contains("їб"))
+}
+
+/// The moment of a point: the first time in its last «[…]» mark
+fn point_time(point: &str) -> Option<u32> {
+    let open = point.rfind('[')?;
+    let inner = &point[open + 1..];
+    let inner = &inner[..inner.find(']')?];
+    parse_mmss(inner.split(',').next()?)
+}
+
+/// A person's points in the order things were said: the model or a number
+/// brought back may put a point from the middle of a report at its end. A
+/// point without a time stays after the one before it.
+pub(crate) fn in_said_order(points: &str) -> String {
+    let mut keyed: Vec<(u32, usize, &str)> = Vec::new();
+    let mut last = 0u32;
+    for (i, line) in points.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+        if let Some(t) = point_time(line) {
+            last = t;
+        }
+        keyed.push((last, i, line));
+    }
+    keyed.sort_by_key(|(t, i, _)| (*t, *i));
+    keyed.into_iter().map(|k| k.2).collect::<Vec<_>>().join("\n")
 }
 
 /// A person's lines without the service remarks
@@ -1199,6 +1233,46 @@ fn fragment_around(sentence: &str, number: &str, most: usize) -> String {
     words[from..to].join(" ").trim_end_matches([',', ';', ':', '.']).to_string()
 }
 
+/// The part of a said sentence that carries `number`, readable on its own:
+/// whole clauses (between commas), never a cut in the middle of one. Up to
+/// `most` words; a clause longer than that is cut around the number.
+fn clause_around(sentence: &str, number: &str, most: usize) -> String {
+    let clean = clean_spoken(sentence.trim());
+    // «, » and «; » only: «4,5» is one number
+    let clauses: Vec<&str> = clean.split(", ").flat_map(|c| c.split("; ")).map(|c| c.trim().trim_end_matches([',', ';'])).filter(|c| !c.is_empty()).collect();
+    let count = |c: &str| c.split_whitespace().count();
+    let Some(at) = clauses.iter().position(|c| c.contains(number)) else { return fragment_around(&clean, number, most) };
+    if count(clauses[at]) > most {
+        return fragment_around(clauses[at], number, most);
+    }
+    let (mut from, mut to) = (at, at);
+    let mut words = count(clauses[at]);
+    // The clause before first (it usually says what the number is about), then the one after
+    loop {
+        let mut grew = false;
+        if from > 0 && words + count(clauses[from - 1]) <= most {
+            from -= 1;
+            words += count(clauses[from]);
+            grew = true;
+        }
+        if to + 1 < clauses.len() && words + count(clauses[to + 1]) <= most {
+            to += 1;
+            words += count(clauses[to]);
+            grew = true;
+        }
+        if !grew {
+            break;
+        }
+    }
+    let text = clauses[from..=to].join(", ");
+    let text = text.trim_end_matches(['.', '!', '?', '…', ':']).to_string();
+    let mut c = text.chars();
+    match c.next() {
+        Some(f) if from == 0 => f.to_uppercase().chain(c).collect(),
+        _ => text,
+    }
+}
+
 /// What became of the numbers a block had lost
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct NumbersKept {
@@ -1227,14 +1301,20 @@ pub(crate) fn keep_numbers(points: &str, lines: &[(u32, String)]) -> (String, Nu
                 seen.push(f.text.clone());
                 let place = out.iter().enumerate().position(|(i, p)| p.contains(&mark) && grown.get(i).copied().unwrap_or(NUMBERS_PER_POINT) < NUMBERS_PER_POINT);
                 if let Some(i) = place {
-                    let phrase = fragment_around(sentence, &f.text, 6);
+                    let phrase = clause_around(sentence, &f.text, 9);
+                    // Already there word for word (another number of the same clause)
+                    if out[i].contains(&phrase) {
+                        kept.appended += 1;
+                        continue;
+                    }
                     let cut = out[i].rfind(&mark).unwrap_or(out[i].len());
                     let head = out[i][..cut].trim_end_matches(['.', ' ']).to_string();
                     out[i] = format!("{head}; {phrase}{}", &out[i][cut..]);
                     grown[i] += 1;
                     kept.appended += 1;
                 } else if kept.added < NEW_NUMBER_POINTS {
-                    out.push(format!("- {}{mark}", fragment_around(sentence, &f.text, 12)));
+                    out.push(format!("- {}{mark}", clause_around(sentence, &f.text, 18)));
+                    grown.push(0);
                     kept.added += 1;
                 } else {
                     kept.left += 1;
@@ -1254,8 +1334,8 @@ pub(crate) fn speaker_block_prompt(speaker: &str, said: &str, points: usize, det
 </said>
 
 Склади {kind} виклад сказаного: головне з доповіді, проблеми, пропозиції, завдання, які дано або взято (кому і який термін, лише якщо це названо). Дрібне об'єднуй, повторів не пиши.
-Не більше {points} пунктів, кожен не довший за {words} слів, у форматі «- текст [ММ:СС]», де мітка часу — того рядка, де це прозвучало. Пункти в тому самому порядку.
-Числа пиши цифрами; дати, імена, псевдоніми й назви дослівно. Нічого не додавай від себе й не роби висновків. Не бери привітань, подяк, перекличок і реплік про звук. Не пиши вступу, заголовків чи імені доповідача. Виведи лише пункти українською."#
+Не більше {points} пунктів, кожен не довший за {words} слів, у форматі «- текст [ММ:СС]», де мітка часу — того рядка, де це прозвучало. Пункти в тому самому порядку, у якому це прозвучало: не переставляй сказане із середини в кінець.
+Кожен пункт — завершена думка, а не обірваний шматок речення. Пиши словами доповідача: не замінюй і не пропускай назв, псевдонімів, орієнтирів, населених пунктів, номерів підрозділів і техніки; числа пиши цифрами, дати й імена дослівно. Нічого не додавай від себе й не роби висновків. Не бери привітань, подяк, перекличок і реплік про звук. Не пиши вступу, заголовків чи імені доповідача. Виведи лише пункти українською."#
     )
 }
 
@@ -2175,12 +2255,29 @@ mod tests {
         let lines = vec![(5, "Доброго ранку, панове. Отримали 5 генераторів. Дякую.".to_string()), (9, "Так.".to_string()), (12, "У когось якісь питання?".to_string())];
         assert_eq!(working_lines(&lines), vec![(5, "Отримали 5 генераторів.".to_string())]);
         assert_eq!(clean_points("- Всім гарного дня [00:10]\n- Отримано 5 генераторів [00:12]\n- Отримано 5 генераторів [00:13]\n- Це нікого не їбе [00:13]\n- Пане Тест [00:14]"), "- Отримано 5 генераторів [00:12]");
+        // A short report line is kept; an answer alone is not; «кораблями» is not swearing
+        let lines = vec![(5, "Втрат немає. Так. Орієнтир Дотик.".to_string()), (9, "Зрозумів.".to_string())];
+        assert_eq!(working_lines(&lines), vec![(5, "Втрат немає. Орієнтир Дотик.".to_string())]);
+        assert_eq!(clean_points("- Втрат немає [00:05]\n- Удари по кораблями і рублями [00:06]"), "- Втрат немає [00:05]\n- Удари по кораблями і рублями [00:06]");
+        // Points in the order they were said: one from the middle stays in the middle
+        assert_eq!(
+            in_said_order("- А [00:10]\n- В [01:30]\n- Б [00:40, 02:00]\n- без часу\n- Г [01:50] ⟨?⟩"),
+            "- А [00:10]\n- Б [00:40, 02:00]\n- без часу\n- В [01:30]\n- Г [01:50] ⟨?⟩"
+        );
         // A lost number goes into the point from its line; else a short point; never more than allowed
         let said = vec![(10, "Передали склад і 150 одиниць майна до офісу.".to_string()), (20, "На ділянці 7 машин, далі 8 ящиків, потім 9 бочок, ще 11 мішків.".to_string())];
         let (text, kept) = keep_numbers("- Передали склад до офісу [00:10]", &said);
-        assert_eq!(kept, NumbersKept { appended: 1, added: 2, left: 2 });
+        // The numbers of one sentence come back in one point, made of whole clauses
+        assert_eq!(kept, NumbersKept { appended: 4, added: 1, left: 0 });
         assert!(text.lines().next().unwrap().contains("150") && text.lines().next().unwrap().ends_with("[00:10]"));
-        assert_eq!(text.lines().count(), 3);
+        assert_eq!(text.lines().count(), 2);
+        assert_eq!(text.lines().nth(1), Some("- На ділянці 7 машин, далі 8 ящиків, потім 9 бочок, ще 11 мішків [00:20]"));
+        let said = vec![(86, "Після завтрашнього дня, тобто з 14 листопада, у нас запускається по плану новий процес обліку складу, тобто ми ведемо і в системі, і продовжуємо робити це через групу, як ми це робили попередні 4,5 роки.".to_string())];
+        let (text, _) = keep_numbers("- Інше [00:10]", &said);
+        assert_eq!(
+            text.lines().nth(1),
+            Some("- Після завтрашнього дня, тобто з 14 листопада, у нас запускається по плану новий процес обліку складу; як ми це робили попередні 4,5 роки [01:26]")
+        );
         assert!(text.lines().all(|l| !l.contains("дослівно")));
         // A number said in words backs the digits; one nobody said is marked
         let said = super::super::numbers::Said::of("отримали двадцять генераторів");

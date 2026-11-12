@@ -159,6 +159,7 @@ const Row = memo(function Row({
   showName,
   color,
   reviewed,
+  excluded,
   manual,
   voiceNote,
   maybe,
@@ -169,6 +170,7 @@ const Row = memo(function Row({
   onNameClick,
   onCopySpeaker,
   onUndoSpeaker,
+  onExclude,
   registerDirty,
   onTime,
 }: {
@@ -179,6 +181,8 @@ const Row = memo(function Row({
   showName: boolean;
   color: string;
   reviewed: boolean;
+  /** Left out of the document («Не включати в документ») */
+  excluded: boolean;
   manual: boolean;
   voiceNote: boolean;
   /** The whole line may be someone else's: «можливо, X?» */
@@ -192,6 +196,7 @@ const Row = memo(function Row({
   onNameClick: (id: string, speaker: string | undefined, anchor: DOMRect) => void;
   onCopySpeaker: (speaker: string, withTimes: boolean) => void;
   onUndoSpeaker: (id: string) => void;
+  onExclude: (id: string, excluded: boolean) => void;
   registerDirty: (id: string, dirty: boolean) => void;
   onTime: (seconds: number) => void;
 }) {
@@ -224,7 +229,7 @@ const Row = memo(function Row({
   };
   const unnamed = isUnnamed(speaker);
   return (
-    <div className="tv-row" data-row={id}>
+    <div className={`tv-row${excluded ? ' tv-row-excluded' : ''}`} data-row={id}>
       <div
         className="tv-who"
         onContextMenu={(e) => {
@@ -235,6 +240,10 @@ const Row = memo(function Row({
             { text: 'Відтворити звідси', action: () => onTime(time) },
             { text: unnamed ? 'Назвати, хто говорить…' : 'Змінити, хто говорить…', action: () => onNameClick(id, speaker, anchor) },
             ...(manual ? [{ text: 'Повернути розпізнаного спікера', action: () => onUndoSpeaker(id) }] : []),
+            'separator',
+            excluded
+              ? { text: 'Включати в документ', action: () => onExclude(id, false) }
+              : { text: 'Не включати в документ', action: () => onExclude(id, true) },
             'separator',
             { text: 'Копіювати рядок', action: () => void navigator.clipboard?.writeText(`${mmss(time)} ${speaker ? `${speaker}: ` : ''}${text}`).catch(() => {}) },
           ]);
@@ -268,6 +277,11 @@ const Row = memo(function Row({
           {mmss(time)}
           {reviewed ? ' ✓' : ''}
         </button>
+        {excluded && (
+          <button type="button" className="tv-note tv-note-excluded" onClick={() => onExclude(id, false)} title="Рядок не потрапить у документ. Натисніть, щоб знову включати його">
+            не в документі
+          </button>
+        )}
         {manual && showName && (
           <button type="button" className="tv-note" onClick={() => onUndoSpeaker(id)} title="Повернути розпізнаного спікера">
             змінено вручну
@@ -433,6 +447,7 @@ export function TranscriptWorkspace({
           end: t.audio_end_time ?? all[i + 1]?.audio_start_time ?? (t.audio_start_time ?? 0) + 5,
           speaker: t.speaker,
           reviewed: !!t.reviewed,
+          excluded: !!t.excluded,
           manual: !!t.speaker_manual,
         })),
     [transcripts],
@@ -669,6 +684,25 @@ export function TranscriptWorkspace({
       } else toast(redo ? 'Нічого повертати' : 'Нічого скасовувати');
     },
     [meetingId, refresh],
+  );
+
+  // «Не включати в документ»: a remark that is nothing for the minutes stays
+  // in the transcript and never reaches the document (one step of the history)
+  const setExcluded = useCallback(
+    async (id: string, excluded: boolean) => {
+      flush();
+      try {
+        await invoke('set_segments_excluded', { meetingId, segmentIds: [id], excluded });
+      } catch (e) {
+        toast.error(`Не вдалося змінити позначку: ${e}`);
+        return;
+      }
+      await refresh();
+      toast(excluded ? 'Рядок не буде включено в документ' : 'Рядок знову буде включено в документ', {
+        action: { label: 'Скасувати', onClick: () => void undo() },
+      });
+    },
+    [meetingId, refresh, undo],
   );
 
   // «Позначити все перевіреним»: one step, undone from the notice too
@@ -1493,6 +1527,7 @@ export function TranscriptWorkspace({
             showName={i === 0 || rows[i - 1].speaker !== r.speaker}
             color={colorOf(r.speaker)}
             reviewed={r.reviewed}
+            excluded={!!r.excluded}
             manual={r.manual}
             voiceNote={voiceRows.has(r.id) && qItem?.rowId !== r.id}
             maybe={maybeOf.get(r.id)}
@@ -1503,6 +1538,7 @@ export function TranscriptWorkspace({
             onNameClick={onNameClick}
             onCopySpeaker={onCopySpeaker}
             onUndoSpeaker={undoSpeaker}
+            onExclude={setExcluded}
             registerDirty={registerDirty}
             onTime={seekRow}
           />

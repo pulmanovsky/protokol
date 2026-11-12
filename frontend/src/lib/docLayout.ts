@@ -1,6 +1,7 @@
 import { Plugin, PluginKey, type EditorState } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { Node as PMNode } from '@tiptap/pm/model';
+import { NO_SOURCE } from './sourceMarks';
 
 /**
  * The document laid out like the transcript: who spoke in the left column
@@ -109,10 +110,16 @@ function build(doc: PMNode, colorOf: (name: string) => string | undefined): Deco
       }
       return;
     }
-    // What was said: the time marks, nested points too
+    // What was said: the time marks, nested points too; a point whose source
+    // was not found (⟨?⟩) tinted amber. «Не враховано» lists remarks left out
+    // on purpose: an unpinned quote there is not a point without a source.
     node.descendants((child, p) => {
       if (child.isTextblock) {
-        timeMarks(child, pos + 1 + p + 1, out);
+        const at = pos + 1 + p;
+        timeMarks(child, at + 1, out);
+        if (child.textContent.split('Не враховано:')[0].includes(NO_SOURCE)) {
+          out.push(Decoration.node(at, at + child.nodeSize, { class: 'no-source', title: 'Без джерела: у словах доповідача цього не знайдено — перевірте' }));
+        }
         return false;
       }
       return true;

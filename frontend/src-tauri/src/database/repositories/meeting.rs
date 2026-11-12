@@ -81,11 +81,13 @@ impl MeetingsRepository {
                     .await?;
 
             transaction.commit().await?;
+            let excluded = crate::speakers::lines::excluded_ids(pool, meeting_id).await.unwrap_or_default();
 
             // Convert Transcript to MeetingTranscript
             let meeting_transcripts = transcripts
                 .into_iter()
                 .map(|t| MeetingTranscript {
+                    excluded: excluded.contains(&t.id),
                     id: t.id,
                     text: t.transcript,
                     timestamp: t.timestamp,

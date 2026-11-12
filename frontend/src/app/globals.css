@@ -1415,7 +1415,8 @@ kbd {
 
 /* A point of the document whose source was not found */
 .no-source {
-  background: color-mix(in srgb, #e0912b 14%, transparent);
+  background: color-mix(in srgb, #e0912b 18%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, #e0912b 18%, transparent);
   border-radius: 6px;
 }
 
@@ -1675,6 +1676,23 @@ kbd {
 .tv-note-voice {
   color: #c27a00;
 }
+/* A line left out of the document («Не включати в документ»): still in the
+   transcript, quieter and struck through */
+.tv-row-excluded .tv-text {
+  color: var(--muted-text);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--muted-text) 60%, transparent);
+}
+.tv-note-excluded {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: right;
+}
+.tv-note-excluded:hover {
+  color: var(--blue);
+}
 .tv-text {
   margin: 0;
   font-size: calc(16px * var(--reading-scale, 1));
@@ -1690,9 +1708,11 @@ kbd {
 .tv-text:focus {
   background: color-mix(in srgb, var(--blue) 6%, transparent);
 }
+/* A word recognition is not sure of: amber, so it is seen at a glance
+   (the grey dotted line was easy to miss, in dark mode especially) */
 .tv-text .tw-doubt {
-  text-decoration: underline dotted var(--muted-text);
-  text-decoration-thickness: 1.5px;
+  text-decoration: underline dotted #d08a12;
+  text-decoration-thickness: 2px;
   text-underline-offset: 4px;
 }
 .tv-text .tw-now {

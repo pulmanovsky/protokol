@@ -320,9 +320,41 @@ pub struct Doubt {
     pub heard: Option<String>,
 }
 
+/// A word as compared between a line and the word times: case and the
+/// punctuation around it aside
+fn same_form(w: &str) -> String {
+    w.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’' && c != '-').to_lowercase()
+}
+
+/// Longest common subsequence of `a` and `b`: the pairs (index in a, index in b)
+fn common_words(a: &[String], b: &[String]) -> Vec<(usize, usize)> {
+    let (n, m) = (a.len(), b.len());
+    let mut t = vec![vec![0u16; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            t[i][j] = if !a[i].is_empty() && a[i] == b[j] { t[i + 1][j + 1] + 1 } else { t[i + 1][j].max(t[i][j + 1]) };
+        }
+    }
+    let (mut i, mut j, mut out) = (0, 0, Vec::new());
+    while i < n && j < m {
+        if !a[i].is_empty() && a[i] == b[j] {
+            out.push((i, j));
+            i += 1;
+            j += 1;
+        } else if t[i + 1][j] >= t[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    out
+}
+
 /// Doubtful and auto-replaced words of a meeting, mapped onto its transcript
-/// lines (`rows`: id and text, in order). Lines that no longer match the
-/// word times (edited elsewhere) are skipped.
+/// lines (`rows`: id and text, in order). A line need not match the word
+/// times word for word: a dictionary rule, an edit or a cut changes some of
+/// its words, and the words left as heard keep their doubt (a line skipped
+/// whole left most of a meeting's doubtful words unmarked).
 pub fn doubts(pieces: &[PieceWords], rows: &[(String, String)], terms: &[String]) -> Vec<Doubt> {
     // Every word with its time, confidence, doubt and «heard as»
     let mut flat: Vec<(String, f64, f32, bool, Option<String>)> = Vec::new();
@@ -333,23 +365,51 @@ pub fn doubts(pieces: &[PieceWords], rows: &[(String, String)], terms: &[String]
             flat.push((w.clone(), *t, p.probs.get(i).copied().unwrap_or(1.0), flags.get(i).copied().unwrap_or(false), heard));
         }
     }
+    let forms: Vec<String> = flat.iter().map(|f| same_form(&f.0)).collect();
     let mut out = Vec::new();
-    let mut k = 0;
+    let mut k = 0usize;
     for (id, text) in rows {
-        let words: Vec<&str> = text.split_whitespace().collect();
+        let words: Vec<String> = text.split_whitespace().map(same_form).collect();
         if words.is_empty() {
             continue;
         }
-        // The line's words where they are next in the word times (or a little later)
-        let found = (k..flat.len().saturating_sub(words.len() - 1).max(k)).take(400).find(|&s| (0..words.len()).all(|j| flat.get(s + j).is_some_and(|f| f.0 == words[j])));
-        let Some(s) = found else { continue };
-        for j in 0..words.len() {
-            let (w, t, p, doubtful, heard) = &flat[s + j];
+        let n = words.len();
+        // Where the line may start: a place where one of its first words is
+        // heard, near where the previous line ended (a little before it too)
+        let from = k.saturating_sub(60);
+        let to = (k + 600).min(flat.len());
+        let mut starts: Vec<usize> = Vec::new();
+        for s in from..to {
+            for (j, w) in words.iter().take(4).enumerate() {
+                if !w.is_empty() && forms[s] == *w && s >= j {
+                    starts.push(s - j);
+                }
+            }
+        }
+        starts.sort_unstable_by_key(|s| (s.abs_diff(k), *s));
+        starts.dedup();
+        starts.truncate(24);
+        let slack = 3 + n / 4;
+        let mut best: Option<(usize, Vec<(usize, usize)>)> = None;
+        for s in starts {
+            let end = (s + n + slack).min(flat.len());
+            let pairs = common_words(&words, &forms[s..end]);
+            if best.as_ref().map_or(true, |(_, b)| pairs.len() > b.len()) {
+                best = Some((s, pairs));
+            }
+        }
+        let Some((s, pairs)) = best else { continue };
+        // Most of the line must be the heard words (else it is another place)
+        if pairs.len() * 2 < n || pairs.is_empty() {
+            continue;
+        }
+        for &(j, f) in &pairs {
+            let (w, t, p, doubtful, heard) = &flat[s + f];
             if *doubtful || heard.is_some() {
                 out.push(Doubt { segment_id: id.clone(), word_index: j, word: w.clone(), seconds: *t, probability: *p, heard: heard.clone() });
             }
         }
-        k = s + words.len();
+        k = s + pairs.last().map(|x| x.1 + 1).unwrap_or(0);
     }
     out
 }
@@ -764,6 +824,14 @@ mod tests {
         assert!(resolve(&mut pieces, 1.0, "отримали"));
         assert!(resolve(&mut pieces, 0.5, "Гончаренко,"));
         assert!(doubts(&pieces, &rows, &["Гончаренко".to_string()]).is_empty());
+        // A line changed in places (a dictionary rule, a typed fix, punctuation)
+        // keeps the doubts of the words left as heard
+        let mut e = piece(10.0, 16.0, &[("Ми", 10.1), ("подивимося,", 10.5), ("що", 11.0), ("по", 11.2), ("шинам", 11.5), ("Ковальчук", 12.0), ("скаже", 12.5)]);
+        e.probs = vec![0.99, 0.3, 0.99, 0.4, 0.99, 0.2, 0.99];
+        let rows = vec![("r3".to_string(), "Ми подивимося що по шинах Ковальчуку скаже.".to_string())];
+        let d = doubts(&[e], &rows, &[]);
+        assert_eq!(d.iter().map(|x| x.word_index).collect::<Vec<_>>(), vec![1, 3]);
+        assert_eq!(d[0].word, "подивимося,");
         // An edit keeps confidence aligned with the words
         let mut c = piece(0.0, 2.0, &[("раз", 0.1), ("двa", 0.5), ("три", 0.9)]);
         c.probs = vec![0.2, 0.9, 0.3];

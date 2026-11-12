@@ -280,7 +280,7 @@ pub async fn apply_to_meeting(pool: &SqlitePool, meeting_id: &str, folder: &Path
             .execute(&mut *tx)
             .await?;
     }
-    for (table, cols) in [("speaker_overrides", ["start", "end"].as_slice()), ("segment_reviews", &["start", "end"]), ("segment_edits", &["at"])] {
+    for (table, cols) in [("speaker_overrides", ["start", "end"].as_slice()), ("segment_reviews", &["start", "end"]), ("segment_exclusions", &["start", "end"]), ("segment_edits", &["at"])] {
         let ids: Vec<(i64, f64, Option<f64>)> = if cols.len() == 2 {
             sqlx::query_as(&format!("SELECT id, start, end FROM {table} WHERE meeting_id = ?")).bind(meeting_id).fetch_all(&mut *tx).await?
         } else {

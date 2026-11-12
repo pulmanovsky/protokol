@@ -379,7 +379,8 @@ export default function PageContent({
   };
 
   // Points of the document whose source was not found (⟨?⟩): counted in the
-  // banner, their blocks tinted amber so the secretary checks them
+  // banner; the editor itself tints them amber (see lib/docLayout: a class
+  // set here by hand was wiped by the editor's next redraw)
   const [noSource, setNoSource] = useState(0);
   const docRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -389,13 +390,7 @@ export default function PageContent({
       if (!root) return;
       let n = 0;
       root.querySelectorAll('.bn-block-content').forEach((el) => {
-        // «Не враховано» lists remarks left out on purpose: an unpinned quote there is not a point without a source
-        const text = el.textContent ?? '';
-        const missing = text.split('Не враховано:')[0].includes(NO_SOURCE);
-        if (missing) n += 1;
-        el.classList.toggle('no-source', missing);
-        if (missing) el.setAttribute('title', 'Без джерела: у словах доповідача цього не знайдено — перевірте');
-        else if (el.getAttribute('title')?.startsWith('Без джерела')) el.removeAttribute('title');
+        if ((el.textContent ?? '').split('Не враховано:')[0].includes(NO_SOURCE)) n += 1;
       });
       setNoSource(n);
     };

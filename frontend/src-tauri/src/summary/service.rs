@@ -595,7 +595,7 @@ impl SummaryService {
         // markers and corrections below change it
         let source_hash = crate::database::repositories::document_variant::source_hash(&text);
         let text = crate::ukrainian::strip_mic_markers(&text);
-        let text = crate::ukrainian::corrections::apply_corrections(&text);
+        let text = crate::ukrainian::corrections::apply_corrections_to_transcript(&text);
 
         // How the secretary wrote up this type of meeting before (examples
         // from approved protocols; this meeting's own are left out)

@@ -799,6 +799,7 @@ pub fn run() {
             speakers::lines::merge_segments,
             speakers::lines::assign_words_speaker,
             speakers::lines::set_segments_reviewed,
+            speakers::lines::set_segments_excluded,
             speakers::lines::api_mark_all_reviewed,
             speakers::lines::get_review_progress,
             speakers::lines::find_voice_changes,

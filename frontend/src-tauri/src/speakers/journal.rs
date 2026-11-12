@@ -53,6 +53,7 @@ const SIDE: &[(&str, &str)] = &[
     ("speaker_overrides", "start, end, speaker, previous, created_at"),
     ("segment_edits", "kind, at, created_at"),
     ("segment_reviews", "start, end, created_at"),
+    ("segment_exclusions", "start, end, created_at"),
     ("meeting_speakers", "label, name, hex(centroid) AS centroid, speech_seconds, role, suggested"),
 ];
 

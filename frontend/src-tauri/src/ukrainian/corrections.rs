@@ -183,6 +183,48 @@ pub fn apply_corrections(text: &str) -> String {
     apply_corrections_with(text, &corrections())
 }
 
+/// The speaker part of a transcript line «[MM:SS] Ім'я: текст»: the time and
+/// the name as they are, then the text
+fn speaker_head(line: &str) -> Option<(&str, &str)> {
+    let rest = line.strip_prefix('[')?;
+    let close = rest.find("] ")? + 1;
+    let after = &rest[close + 1..];
+    let (who, _) = after.split_once(": ")?;
+    let core = who.trim().trim_end_matches("(?)").trim().trim_end_matches('?').trim();
+    let ok = who.trim() == "?"
+        || (!core.is_empty()
+            && who.chars().count() <= 40
+            && core.split_whitespace().count() <= 4
+            && core.chars().next().is_some_and(|c| c.is_uppercase())
+            && !core.contains(['.', ',', '!', '?']));
+    if !ok {
+        return None;
+    }
+    let head = 1 + close + 1 + who.len() + 2;
+    Some((&line[..head], &line[head..]))
+}
+
+/// As `apply_corrections` for a transcript of «[MM:SS] Ім'я: текст» lines:
+/// the names of the speakers stay exactly as in the transcript (a rule made
+/// for a word must not rename a person in the document)
+pub fn apply_corrections_to_transcript(text: &str) -> String {
+    apply_corrections_to_transcript_with(text, &corrections())
+}
+
+pub fn apply_corrections_to_transcript_with(text: &str, pairs: &[(String, String)]) -> String {
+    if pairs.is_empty() {
+        return text.to_string();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for line in text.split('\n') {
+        match speaker_head(line) {
+            Some((head, said)) => out.push(format!("{head}{}", apply_corrections_with(said, pairs))),
+            None => out.push(apply_corrections_with(line, pairs)),
+        }
+    }
+    out.join("\n")
+}
+
 /// Rules applied while a recording is recognised, waiting for its meeting
 /// (the meeting exists only when the recording is saved)
 static PENDING: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
@@ -385,6 +427,14 @@ pub fn dismissed() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speaker_names_stay_as_in_the_transcript() {
+        let pairs = vec![("сокіл".to_string(), "соки".to_string())];
+        let text = "[00:14] Олена: Доброго ранку.\n[00:35] Сокіл: Сокіл доповідає, стан без змін.\n[01:00] Сокіл (?): ще\n[01:05] без імені сокіл";
+        let out = apply_corrections_to_transcript_with(text, &pairs);
+        assert_eq!(out, "[00:14] Олена: Доброго ранку.\n[00:35] Сокіл: Соки доповідає, стан без змін.\n[01:00] Сокіл (?): ще\n[01:05] без імені соки");
+    }
 
     #[test]
     fn groups_spellings_of_the_same_name() {

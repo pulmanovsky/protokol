@@ -455,10 +455,12 @@ export function useSummaryGeneration({
 
     return {
       transcriptText: allTranscripts
+        // Lines the secretary left out («Не включати в документ») never reach the document
+        .filter((transcript) => !transcript.excluded)
         // «[MM:SS] Спікер 2: text» when speakers were recognised by voice
         .map((transcript) => `${formatTime(transcript.audio_start_time, transcript.timestamp)} ${transcript.speaker ? `${transcript.speaker}: ` : ''}${transcript.text}`)
         .join('\n'),
-      transcriptTexts: allTranscripts.map((transcript) => transcript.text),
+      transcriptTexts: allTranscripts.filter((transcript) => !transcript.excluded).map((transcript) => transcript.text),
     };
   }, []);
 

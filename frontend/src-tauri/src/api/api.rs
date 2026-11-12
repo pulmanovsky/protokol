@@ -157,6 +157,9 @@ pub struct MeetingTranscript {
     /// Marked «перевірено»
     #[serde(default)]
     pub reviewed: bool,
+    /// Left out of the document («Не включати в документ»)
+    #[serde(default)]
+    pub excluded: bool,
 }
 
 /// Meeting metadata without transcripts (for pagination)
@@ -943,10 +946,12 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                 total_count
             );
 
+            let excluded = crate::speakers::lines::excluded_ids(pool, &meeting_id).await.unwrap_or_default();
             // Convert Transcript to MeetingTranscript
             let meeting_transcripts = transcripts
                 .into_iter()
                 .map(|t| MeetingTranscript {
+                    excluded: excluded.contains(&t.id),
                     id: t.id,
                     text: t.transcript,
                     timestamp: t.timestamp,
