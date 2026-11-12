@@ -34,25 +34,9 @@ export function RecordingSettings({ onSave, part = 'recording' }: RecordingSetti
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [showRecordingNotification, setShowRecordingNotification] = useState(true);
   const { isRecording } = useRecordingState();
   const { setSelectedDevices } = useConfig();
   const [audioSources, setAudioSources] = useAudioSources();
-  const [hideFromScreenShare, setHideFromScreenShare] = useState(false);
-  useEffect(() => {
-    invoke<boolean>('api_get_hide_from_screen_share').then(setHideFromScreenShare).catch(() => {});
-  }, []);
-  const handleHideFromScreenShare = async (enabled: boolean) => {
-    setHideFromScreenShare(enabled);
-    try {
-      await invoke('api_set_hide_from_screen_share', { enabled });
-    } catch (error) {
-      console.error('Failed to save screen share setting', error);
-      setHideFromScreenShare(!enabled);
-      toast.error('Не вдалося зберегти налаштування');
-    }
-  };
-
   // Load recording preferences on component mount
   useEffect(() => {
     const loadPreferences = async () => {
@@ -74,21 +58,6 @@ export function RecordingSettings({ onSave, part = 'recording' }: RecordingSetti
     };
 
     loadPreferences();
-  }, []);
-
-  // Load recording notification preference
-  useEffect(() => {
-    const loadNotificationPref = async () => {
-      try {
-        const { Store } = await import('@tauri-apps/plugin-store');
-        const store = await Store.load('preferences.json');
-        const show = await store.get<boolean>('show_recording_notification') ?? true;
-        setShowRecordingNotification(show);
-      } catch (error) {
-        console.error('Failed to load notification preference:', error);
-      }
-    };
-    loadNotificationPref();
   }, []);
 
   const handleAutoSaveToggle = async (enabled: boolean) => {
@@ -151,23 +120,6 @@ export function RecordingSettings({ onSave, part = 'recording' }: RecordingSetti
     }
   };
 
-  const handleNotificationToggle = async (enabled: boolean) => {
-    try {
-      setShowRecordingNotification(enabled);
-      const { Store } = await import('@tauri-apps/plugin-store');
-      const store = await Store.load('preferences.json');
-      await store.set('show_recording_notification', enabled);
-      await store.save();
-      toast.success('Збережено');
-      await Analytics.track('recording_notification_preference_changed', {
-        enabled: enabled.toString()
-      });
-    } catch (error) {
-      console.error('Failed to save notification preference:', error);
-      toast.error('Не вдалося зберегти');
-    }
-  };
-
   const savePreferences = async (prefs: RecordingPreferences, quiet = false) => {
     setSaving(true);
     try {
@@ -203,7 +155,7 @@ export function RecordingSettings({ onSave, part = 'recording' }: RecordingSetti
   if (part === 'storage') {
     return (
       <SettingsGroup
-        title="Сховище"
+        title="Аудіозаписи"
         help={
           preferences.auto_save
             ? 'Кожен запис зберігається в окремій папці зі звуком, названій за датою та часом. Після зміни папки нові записи зберігаються в новій, наявні залишаються на своєму місці.'
@@ -282,24 +234,6 @@ export function RecordingSettings({ onSave, part = 'recording' }: RecordingSetti
         </SettingsBlock>
       </SettingsGroup>
 
-      <SettingsGroup
-        title="Під час запису"
-        help="Панель запису ніколи не потрапляє в показ екрана. Головне вікно також можна приховати від показу екрана в Zoom, Meet, Teams і від знімків екрана."
-      >
-        <SettingsRow
-          label={
-            <span className="flex flex-col min-w-0">
-              <span>Нагадувати повідомити учасників про запис</span>
-              <span className="text-xs text-[color:var(--muted-text)]">На початку запису з'являється нагадування повідомити учасників, що розмова записується</span>
-            </span>
-          }
-        >
-          <Switch checked={showRecordingNotification} onCheckedChange={handleNotificationToggle} aria-label="Нагадувати повідомити учасників про запис" />
-        </SettingsRow>
-        <SettingsRow label="Приховувати головне вікно під час показу екрана">
-          <Switch checked={hideFromScreenShare} onCheckedChange={handleHideFromScreenShare} aria-label="Приховувати головне вікно під час показу екрана" />
-        </SettingsRow>
-      </SettingsGroup>
     </div>
   );
 }

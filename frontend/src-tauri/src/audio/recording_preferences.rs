@@ -1,6 +1,6 @@
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_store::StoreExt;
 
@@ -39,21 +39,114 @@ impl Default for RecordingPreferences {
     }
 }
 
-/// Folder name for new installs
+/// The recordings folder: ~/Movies/Protokol
 const RECORDINGS_DIR_NAME: &str = "Protokol";
-/// Folder name used by Meetily; kept for installs that already record there
+/// Meetily's folder name: only read, to move recordings out of it once
 const LEGACY_RECORDINGS_DIR_NAME: &str = "meetily-recordings";
 
-/// Get the default recordings folder based on platform.
-/// New installs use ".../Protokol"; if the legacy Meetily folder already exists
-/// it stays the default so existing recordings are not split across two places.
+/// The default recordings folder (~/Movies/Protokol on a Mac). Never the
+/// legacy Meetily folder: that one is only moved from (see [`migrate_legacy_folder`]).
 pub fn get_default_recordings_folder() -> PathBuf {
-    let parent = default_recordings_parent();
-    let legacy = parent.join(LEGACY_RECORDINGS_DIR_NAME);
+    default_recordings_parent().join(RECORDINGS_DIR_NAME)
+}
+
+/// The folder earlier versions recorded into
+pub fn legacy_recordings_folder() -> PathBuf {
+    default_recordings_parent().join(LEGACY_RECORDINGS_DIR_NAME)
+}
+
+fn is_legacy(path: &Path) -> bool {
+    path.file_name().and_then(|n| n.to_str()) == Some(LEGACY_RECORDINGS_DIR_NAME)
+}
+
+/// Moves what is in `legacy` into `target`: the folder is renamed when
+/// `target` does not exist, otherwise item by item without overwriting.
+/// `legacy` is removed when it ends up empty. Returns how many items moved.
+pub(crate) fn move_legacy_recordings(legacy: &Path, target: &Path) -> std::io::Result<usize> {
+    if !legacy.is_dir() {
+        return Ok(0);
+    }
+    if !target.exists() {
+        let n = std::fs::read_dir(legacy)?.count();
+        std::fs::rename(legacy, target)?;
+        info!("Recordings folder moved: {:?} → {:?} ({} item(s))", legacy, target, n);
+        return Ok(n);
+    }
+    let mut moved = 0;
+    for entry in std::fs::read_dir(legacy)?.flatten() {
+        let to = target.join(entry.file_name());
+        if to.exists() {
+            warn!("Not moved, already in {:?}: {:?}", target, entry.file_name());
+            continue;
+        }
+        std::fs::rename(entry.path(), &to)?;
+        moved += 1;
+    }
+    info!("Recordings moved from {:?} into {:?}: {}", legacy, target, moved);
+    let left = std::fs::read_dir(legacy).map(|d| d.flatten().filter(|e| e.file_name() != ".DS_Store").count()).unwrap_or(1);
+    if left == 0 {
+        let _ = std::fs::remove_file(legacy.join(".DS_Store"));
+        std::fs::remove_dir(legacy)?;
+        info!("Empty legacy folder removed: {:?}", legacy);
+    }
+    Ok(moved)
+}
+
+/// Recordings saved in the database under `legacy/…` now point to `target/…`
+/// (also those whose files are missing, so a later restore still matches).
+/// The database is copied first with `VACUUM INTO <db>.before-recordings-folder-<time>`.
+pub(crate) async fn rewrite_recording_paths(pool: &sqlx::SqlitePool, legacy: &Path, target: &Path, db_path: Option<&Path>) -> anyhow::Result<u64> {
+    let from = format!("{}/", legacy.to_string_lossy());
+    let to = format!("{}/", target.to_string_lossy());
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meetings WHERE substr(folder_path, 1, length(?)) = ?").bind(&from).bind(&from).fetch_one(pool).await?;
+    if n == 0 {
+        return Ok(0);
+    }
+    if let Some(db) = db_path {
+        let backup = format!("{}.before-recordings-folder-{}", db.to_string_lossy(), chrono::Utc::now().format("%Y%m%d%H%M%S"));
+        sqlx::query("VACUUM INTO ?").bind(&backup).execute(pool).await?;
+        info!("Database copied before changing recording paths: {backup}");
+    }
+    let done = sqlx::query("UPDATE meetings SET folder_path = ? || substr(folder_path, length(?) + 1) WHERE substr(folder_path, 1, length(?)) = ?")
+        .bind(&to)
+        .bind(&from)
+        .bind(&from)
+        .bind(&from)
+        .execute(pool)
+        .await?;
+    info!("Recording paths rewritten {} → {}: {}", from, to, done.rows_affected());
+    Ok(done.rows_affected())
+}
+
+/// Once at startup: recordings leave Meetily's folder for ~/Movies/Protokol.
+/// Preferences that point at the legacy folder (or nowhere) now point at the
+/// default; a folder the person chose stays as it is. The legacy folder is
+/// never created.
+pub async fn migrate_legacy_folder<R: Runtime>(app: &AppHandle<R>, pool: &sqlx::SqlitePool, db_path: Option<&Path>) {
+    let legacy = legacy_recordings_folder();
+    let target = get_default_recordings_folder();
+    if let Ok(store) = app.store("recording_preferences.json") {
+        if let Some(mut value) = store.get("preferences") {
+            let saved = value.get("save_folder").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if saved.is_empty() || is_legacy(Path::new(&saved)) {
+                value["save_folder"] = serde_json::Value::String(target.to_string_lossy().to_string());
+                store.set("preferences", value);
+                match store.save() {
+                    Ok(()) => info!("Recordings folder setting: {:?} → {:?}", saved, target),
+                    Err(e) => warn!("Recordings folder setting not saved: {e}"),
+                }
+            }
+        }
+    }
     if legacy.is_dir() {
-        legacy
-    } else {
-        parent.join(RECORDINGS_DIR_NAME)
+        if let Err(e) = move_legacy_recordings(&legacy, &target) {
+            warn!("Recordings not moved out of {:?}: {e}", legacy);
+        }
+    }
+    match rewrite_recording_paths(pool, &legacy, &target, db_path).await {
+        Ok(n) if n > 0 => {}
+        Ok(_) => {}
+        Err(e) => warn!("Recording paths not rewritten: {e}"),
     }
 }
 
@@ -106,6 +199,9 @@ pub fn recordings_folder() -> PathBuf {
 
 /// Ensure the recordings directory exists
 pub fn ensure_recordings_directory(path: &PathBuf) -> Result<()> {
+    if is_legacy(path) && !path.exists() {
+        return Err(anyhow::anyhow!("Meetily's old recordings folder is not created again"));
+    }
     if !path.exists() {
         std::fs::create_dir_all(path)?;
         info!("Created recordings directory: {:?}", path);
@@ -415,3 +511,62 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
     }
 }
 
+
+#[cfg(test)]
+mod legacy_folder_tests {
+    use super::*;
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("protokol-legacy-{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[tokio::test]
+    async fn legacy_recordings_move_and_paths_follow() {
+        let root = tmp("move");
+        let legacy = root.join("meetily-recordings");
+        let target = root.join("Protokol");
+        std::fs::create_dir_all(legacy.join("Нарада 1")).unwrap();
+        std::fs::write(legacy.join("Нарада 1/audio.mp4"), b"a").unwrap();
+        // the target exists with one recording of the same name: not overwritten
+        std::fs::create_dir_all(target.join("Нарада 2")).unwrap();
+        std::fs::create_dir_all(legacy.join("Нарада 2")).unwrap();
+        assert_eq!(move_legacy_recordings(&legacy, &target).unwrap(), 1);
+        assert!(target.join("Нарада 1/audio.mp4").exists());
+        assert!(legacy.join("Нарада 2").exists(), "a clash stays where it was");
+
+        let db = root.join("m.sqlite");
+        let url = db.to_string_lossy().to_string();
+        use sqlx::migrate::MigrateDatabase;
+        sqlx::Sqlite::create_database(&url).await.unwrap();
+        let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+        sqlx::query("CREATE TABLE meetings (id TEXT, folder_path TEXT)").execute(&pool).await.unwrap();
+        let old = format!("{}/Нарада 1", legacy.to_string_lossy());
+        sqlx::query("INSERT INTO meetings VALUES ('a', ?), ('b', '/elsewhere/x')").bind(&old).execute(&pool).await.unwrap();
+        assert_eq!(rewrite_recording_paths(&pool, &legacy, &target, Some(&db)).await.unwrap(), 1);
+        let a: String = sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = 'a'").fetch_one(&pool).await.unwrap();
+        let b: String = sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = 'b'").fetch_one(&pool).await.unwrap();
+        assert_eq!(a, format!("{}/Нарада 1", target.to_string_lossy()));
+        assert_eq!(b, "/elsewhere/x", "a chosen folder stays");
+        assert!(std::fs::read_dir(&root).unwrap().flatten().any(|e| e.file_name().to_string_lossy().contains("before-recordings-folder")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn whole_legacy_folder_is_renamed_when_protokol_is_new_and_absent_one_is_never_created() {
+        let root = tmp("rename");
+        let legacy = root.join("meetily-recordings");
+        let target = root.join("Protokol");
+        std::fs::create_dir_all(legacy.join("x")).unwrap();
+        assert_eq!(move_legacy_recordings(&legacy, &target).unwrap(), 1);
+        assert!(!legacy.exists() && target.join("x").exists());
+        // absent: nothing moves, nothing is created
+        assert_eq!(move_legacy_recordings(&legacy, &target).unwrap(), 0);
+        assert!(!legacy.exists());
+        assert!(ensure_recordings_directory(&legacy).is_err());
+        assert!(!legacy.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

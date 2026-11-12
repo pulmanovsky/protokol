@@ -1,5 +1,6 @@
 "use client";
 
+import { FindField } from '@/components/FindField';
 import { DocumentProgress } from './DocumentProgress';
 import { MeetingSummary, Summary, Transcript } from '@/types';
 import { BlockNoteSummaryView, BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
@@ -10,7 +11,7 @@ import { SummaryGeneratorButtonGroup } from './SummaryGeneratorButtonGroup';
 import Analytics from '@/lib/analytics';
 import React, { useEffect, useRef, useState, RefObject } from 'react';
 import { toast } from '@/lib/notice';
-import { ChevronDown, Globe, Loader2, Save, Search } from 'lucide-react';
+import { ChevronDown, Globe, Loader2, Save } from 'lucide-react';
 import { speakerColorMap } from '@/lib/speakerColors';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { LanguagePickerPopover } from '@/components/LanguagePickerPopover';
@@ -101,8 +102,7 @@ export function SummaryPanel({
   emptyState,
   docKey,
 }: SummaryPanelProps) {
-  const [searching, setSearching] = useState(false);
-  const [query, setQuery] = useState('');
+  const docRef = useRef<HTMLDivElement>(null);
   const [summaryLang, setSummaryLang] = useState<string | null>(null);
   const [summaryLangStorage, setSummaryLangStorage] = useState<SummaryLanguageStorage>('metadata');
   const [langPickerOpen, setLangPickerOpen] = useState(false);
@@ -311,26 +311,7 @@ export function SummaryPanel({
           </button>
         )}
         <div className="flex-1" />
-        {searching ? (
-          <input
-            autoFocus
-            className="tv-search"
-            placeholder="Пошук"
-            aria-label="Пошук у документі"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              // WebKit's own find: selects the next match and scrolls to it
-              if (e.key === 'Enter' && query.trim()) (window as any).find?.(query.trim(), false, e.shiftKey, true);
-              if (e.key === 'Escape') setSearching(false);
-            }}
-            onBlur={() => !query && setSearching(false)}
-          />
-        ) : (
-          <button type="button" className="tv-icon tv-find" aria-label="Пошук" title="Пошук" onClick={() => setSearching(true)} disabled={!hasSummary}>
-            <Search className="h-4 w-4" />
-          </button>
-        )}
+        <FindField target={docRef} label="Пошук у документі" disabled={!hasSummary} />
         {toolbarRight}
       </div>
       {banner && <div className="doc-banner-slot">{banner}</div>}
@@ -351,7 +332,7 @@ export function SummaryPanel({
           />
         </div>
       ) : (
-        <div className="doc-surface custom-scrollbar" onClick={onTextClick}>
+        <div className="doc-surface custom-scrollbar" ref={docRef} onClick={onTextClick}>
           {unnamedVoices > 0 && (
             <p className="doc-note">
               У документі {unnamedVoices} {unnamedVoices === 1 ? 'голос' : unnamedVoices < 5 ? 'голоси' : 'голосів'} без імені. Підпишіть їх у «Спікери» над стенограмою: наступного разу ці голоси підпишуться самі.

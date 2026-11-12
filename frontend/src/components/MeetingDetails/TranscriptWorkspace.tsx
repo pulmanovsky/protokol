@@ -1,10 +1,12 @@
 'use client';
 
+import { FindField } from '@/components/FindField';
+import { restorePlace, savedScroll, saveScroll } from '@/lib/uiPrefs';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from '@/lib/notice';
-import { CheckCheck, ChevronLeft, ChevronRight, Copy, Search, Volume2 } from 'lucide-react';
+import { CheckCheck, ChevronLeft, ChevronRight, Copy, Volume2 } from 'lucide-react';
 import { copySpeakerText } from '@/lib/copySpeaker';
 import { snippetRange } from '@/lib/snippet';
 import { Transcript } from '@/types';
@@ -697,6 +699,28 @@ export function TranscriptWorkspace({
   const barRef = useRef<HTMLDivElement>(null);
   const [barPlace, setBarPlace] = useState<{ left: number; top: number; maxWidth: number } | null>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
+  // Загальні → «Повертатися до місця в стенограмі»: the scroll is kept per recording
+  useEffect(() => {
+    const el = surfaceRef.current;
+    if (!el) return;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const onScroll = () => {
+      clearTimeout(t);
+      t = setTimeout(() => saveScroll(meetingId, el.scrollTop), 250);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      clearTimeout(t);
+      el.removeEventListener('scroll', onScroll);
+    };
+  }, [meetingId]);
+  const restoredFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (restoredFor.current === meetingId || rows.length === 0) return;
+    restoredFor.current = meetingId;
+    const top = restorePlace() ? savedScroll(meetingId) : 0;
+    if (top > 0) requestAnimationFrame(() => surfaceRef.current?.scrollTo({ top }));
+  }, [meetingId, rows.length]);
   const readSelection = (likely?: string): Chosen | null => {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
@@ -1321,28 +1345,6 @@ export function TranscriptWorkspace({
     };
   }, [rows]);
 
-  // Search
-  const [searching, setSearching] = useState(false);
-  const [query, setQuery] = useState('');
-  const findNext = () => {
-    const q = query.trim().toLowerCase();
-    if (!q) return;
-    const sel = window.getSelection();
-    const fromRow = sel?.anchorNode ? (sel.anchorNode.nodeType === 3 ? sel.anchorNode.parentElement : (sel.anchorNode as Element))?.closest('[data-row]')?.getAttribute('data-row') : null;
-    const start = fromRow ? (rowIndex.get(fromRow) ?? -1) + 1 : 0;
-    for (let n = 0; n < rows.length; n++) {
-      const r = rows[(start + n) % rows.length];
-      const words = wordsOf(r.text);
-      const i = words.findIndex((w) => w.toLowerCase().includes(q));
-      if (i >= 0) {
-        surfaceRef.current?.querySelector(`[data-row="${r.id}"]`)?.scrollIntoView({ block: 'center' });
-        selectWords(r.id, i, i);
-        player.onSeek(lineWords.get(r.id)?.[i]?.start ?? r.start);
-        return;
-      }
-    }
-    toast('Не знайдено');
-  };
 
   // The words chosen, as a time band on the timeline
   const band = useMemo((): [number, number] | null => {
@@ -1449,25 +1451,7 @@ export function TranscriptWorkspace({
           </span>
         )}
         <div className="flex-1" />
-        {searching ? (
-          <input
-            autoFocus
-            className="tv-search"
-            placeholder="Пошук"
-            aria-label="Пошук у стенограмі"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') findNext();
-              if (e.key === 'Escape') setSearching(false);
-            }}
-            onBlur={() => !query && setSearching(false)}
-          />
-        ) : (
-          <button type="button" className="tv-icon tv-find" aria-label="Пошук" title="Пошук" onClick={() => setSearching(true)}>
-            <Search className="h-4 w-4" />
-          </button>
-        )}
+        <FindField target={surfaceRef} label="Пошук у стенограмі" />
         <TranscriptButtonGroup
           transcriptCount={rows.length}
           onCopyTranscript={onCopyTranscript}

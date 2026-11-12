@@ -1,6 +1,6 @@
 {
-    "name": "meetily",
-    "version": "0.3.13",
+    "name": "protokol",
+    "version": "0.3.19",
     "private": true,
     "main": "electron/main.js",
     "scripts": {

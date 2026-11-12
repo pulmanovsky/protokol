@@ -62,6 +62,7 @@ pub mod calendar;
 pub mod whisper_engine;
 pub mod power;
 pub mod island;
+pub mod settings_extra;
 
 #[cfg(test)]
 mod eval_pipeline;
@@ -439,6 +440,15 @@ pub fn run() {
             {
                 let handle = _app.handle().clone();
                 tauri::async_runtime::spawn(async move {
+                    // Meetily's old folder → ~/Movies/Protokol, once the database is open
+                    for _ in 0..40 {
+                        if let Ok(pool) = speakers::commands::pool(&handle) {
+                            let db = handle.path().app_data_dir().ok().map(|d| d.join("meeting_minutes.sqlite"));
+                            audio::recording_preferences::migrate_legacy_folder(&handle, &pool, db.as_deref()).await;
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    }
                     let _ = audio::recording_preferences::load_recording_preferences(&handle).await;
                 });
             }
@@ -495,6 +505,8 @@ pub fn run() {
             if let Err(e) = tray::create_tray(_app.handle()) {
                 log::error!("Failed to create system tray: {}", e);
             }
+            // Settings → Загальні → «Показувати значок у рядку меню»
+            settings_extra::apply_tray(_app.handle());
 
             // Initialize notification system with proper defaults
             log::info!("Initializing notification system...");
@@ -909,6 +921,22 @@ pub fn run() {
             set_language_preference,
             // Notification system commands
             notifications::commands::get_notification_settings,
+            settings_extra::api_login_item_get,
+            settings_extra::api_login_item_set,
+            settings_extra::api_tray_visible_get,
+            settings_extra::api_tray_visible_set,
+            settings_extra::api_storage_usage,
+            settings_extra::api_models_folder,
+            settings_extra::api_models_reveal,
+            settings_extra::api_log_reveal,
+            settings_extra::api_log_size,
+            settings_extra::api_log_clear,
+            settings_extra::api_voice_profiles_delete_all,
+            settings_extra::api_corrections_clear,
+            speakers::commands::api_voice_recognition_get,
+            speakers::commands::api_voice_recognition_set,
+            notifications::commands::api_notification_permission,
+            notifications::commands::api_open_notification_settings,
             notifications::commands::set_notification_settings,
             notifications::commands::request_notification_permission,
             notifications::commands::show_notification,

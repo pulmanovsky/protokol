@@ -1,6 +1,7 @@
 "use client"
 import { useSidebar } from "@/components/Sidebar/SidebarProvider";
 import { useState, useEffect, useCallback, Suspense } from "react";
+import { rememberLastMeeting } from "@/lib/uiPrefs";
 import { MeetingSummary, SummaryProcessResponse, Transcript } from "@/types";
 import PageContent from "./page-content";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -35,6 +36,10 @@ function MeetingDetailsContent() {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [shouldAutoGenerate, setShouldAutoGenerate] = useState<boolean>(false);
   const [hasCheckedAutoGen, setHasCheckedAutoGen] = useState<boolean>(false);
+  // Загальні → «Після запуску відкривати: Останній запис»
+  useEffect(() => {
+    if (meetingId) rememberLastMeeting(meetingId);
+  }, [meetingId]);
 
   // Use pagination hook for efficient transcript loading
   const {

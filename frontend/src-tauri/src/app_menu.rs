@@ -61,6 +61,10 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&item("menu_tab_transcript", "Стенограма", Some("CmdOrCtrl+1"))?)
         .item(&item("menu_tab_document", "Документ", Some("CmdOrCtrl+2"))?)
         .separator()
+        .item(&item("menu_text_bigger", "Більший текст", Some("CmdOrCtrl+Equal"))?)
+        .item(&item("menu_text_smaller", "Менший текст", Some("CmdOrCtrl+Minus"))?)
+        .item(&item("menu_text_normal", "Звичайний розмір тексту", Some("CmdOrCtrl+0"))?)
+        .separator()
         .item(&PredefinedMenuItem::fullscreen(app, Some("На весь екран"))?)
         .build()?;
     let window = SubmenuBuilder::new(app, "Вікно")
@@ -149,6 +153,9 @@ pub fn on_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
         "menu_sidebar" => "window.dispatchEvent(new CustomEvent('protokol:menu', { detail: 'sidebar' }))",
         "menu_tab_transcript" => "window.dispatchEvent(new CustomEvent('protokol:menu', { detail: 'tab-transcript' }))",
         "menu_tab_document" => "window.dispatchEvent(new CustomEvent('protokol:menu', { detail: 'tab-document' }))",
+        "menu_text_bigger" => "window.dispatchEvent(new CustomEvent('protokol:menu', { detail: 'text-bigger' }))",
+        "menu_text_smaller" => "window.dispatchEvent(new CustomEvent('protokol:menu', { detail: 'text-smaller' }))",
+        "menu_text_normal" => "window.dispatchEvent(new CustomEvent('protokol:menu', { detail: 'text-normal' }))",
         _ => return,
     };
     let _ = window.eval(js);

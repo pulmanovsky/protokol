@@ -20,6 +20,10 @@ pub enum NotificationType {
     RecordingPaused,
     RecordingResumed,
     TranscriptionComplete,
+    /// The document (protocol) of a recording is ready
+    DocumentReady,
+    /// A transcript or a document could not be made
+    ProcessingFailed,
     MeetingReminder(u64), // Duration in minutes
     SystemError(String),
     Test, // For testing notifications
@@ -181,10 +185,21 @@ impl Notification {
         Notification::new(
             "Документ готовий",
             format!("{meeting_title}. Перевірте та надішліть учасникам."),
-            NotificationType::TranscriptionComplete,
+            NotificationType::DocumentReady,
         )
         .with_priority(NotificationPriority::Normal)
         .with_timeout(NotificationTimeout::Seconds(5))
+    }
+
+    /// A transcript or a document of `meeting_title` (when known) could not be made
+    pub fn processing_failed(what: &str, meeting_title: Option<&str>) -> Self {
+        let body = match meeting_title {
+            Some(t) => format!("{t}. Відкрийте запис, щоб спробувати ще раз."),
+            None => "Відкрийте запис, щоб спробувати ще раз.".to_string(),
+        };
+        Notification::new(format!("Не вдалося створити {what}"), body, NotificationType::ProcessingFailed)
+            .with_priority(NotificationPriority::Normal)
+            .with_timeout(NotificationTimeout::Seconds(8))
     }
 
     pub fn meeting_reminder(minutes_until: u64, meeting_title: Option<String>) -> Self {

@@ -52,6 +52,14 @@ pub struct NotificationPreferences {
     /// Show transcription complete notifications
     pub show_transcription_complete: bool,
 
+    /// Show «Документ готовий» (older settings files: same as the transcript)
+    #[serde(default = "default_true")]
+    pub show_document_ready: bool,
+
+    /// Show «Не вдалося створити стенограму або документ»
+    #[serde(default = "default_true")]
+    pub show_processing_failed: bool,
+
     /// Show meeting reminder notifications
     pub show_meeting_reminders: bool,
 
@@ -78,6 +86,10 @@ impl Default for NotificationSettings {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Default for NotificationPreferences {
     fn default() -> Self {
         Self {
@@ -86,6 +98,8 @@ impl Default for NotificationPreferences {
             show_recording_paused: true,
             show_recording_resumed: true,
             show_transcription_complete: true,
+            show_document_ready: true,
+            show_processing_failed: true,
             show_meeting_reminders: true,
             show_system_errors: true,
             meeting_reminder_minutes: vec![15, 5], // 15 minutes and 5 minutes before
@@ -112,17 +126,12 @@ impl<R: Runtime> ConsentManager<R> {
 
     /// Get the path where notification settings are stored
     fn get_settings_path() -> Result<PathBuf> {
-        let mut path = dirs::config_dir()
-            .ok_or_else(|| anyhow!("Could not find config directory"))?;
-
-        path.push("meetily");
-        path.push("notifications.json");
-
-        // Ensure parent directory exists
+        // In the app's own folder
+        let config = dirs::config_dir().ok_or_else(|| anyhow!("Could not find config directory"))?;
+        let path = config.join(crate::identity::IDENTIFIER).join("notifications.json");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-
         Ok(path)
     }
 
@@ -273,5 +282,18 @@ pub fn merge_with_defaults(partial: NotificationSettings) -> NotificationSetting
         consent_given: partial.consent_given,
         manual_dnd_mode: partial.manual_dnd_mode,
         notification_preferences: partial.notification_preferences,
+    }
+}
+#[cfg(test)]
+mod new_preferences_tests {
+    use super::*;
+
+    #[test]
+    fn older_settings_files_keep_document_and_failure_notifications_on() {
+        let old = r#"{"show_recording_started":true,"show_recording_stopped":true,"show_recording_paused":true,"show_recording_resumed":true,"show_transcription_complete":false,"show_meeting_reminders":true,"show_system_errors":true,"meeting_reminder_minutes":[15,5]}"#;
+        let p: NotificationPreferences = serde_json::from_str(old).expect("old file reads");
+        assert!(p.show_document_ready);
+        assert!(p.show_processing_failed);
+        assert!(!p.show_transcription_complete);
     }
 }

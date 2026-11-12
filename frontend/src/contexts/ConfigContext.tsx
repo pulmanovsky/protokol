@@ -37,6 +37,8 @@ export interface NotificationSettings {
     show_recording_paused: boolean;
     show_recording_resumed: boolean;
     show_transcription_complete: boolean;
+    show_document_ready?: boolean;
+    show_processing_failed?: boolean;
     show_meeting_reminders: boolean;
     show_system_errors: boolean;
     meeting_reminder_minutes: number[];

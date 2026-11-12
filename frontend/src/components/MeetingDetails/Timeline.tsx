@@ -483,7 +483,7 @@ export function Timeline({ meetingId, lines, colorOf, duration, current, playing
   const expandedH = Math.min(typeof window === 'undefined' ? 400 : window.innerHeight * 0.4, 44 + 22 + RULER_H + people.length * LANE_H + 16);
 
   return (
-    <footer className={`tl ${expanded ? 'tl-expanded' : 'tl-compact'}`} style={{ height: expanded ? expandedH : 52 }}>
+    <footer data-notice-anchor-bottom className={`tl ${expanded ? 'tl-expanded' : 'tl-compact'}`} style={{ height: expanded ? expandedH : 52 }}>
       {expanded ? (
         <>
           <div className="tl-top">

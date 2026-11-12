@@ -1491,6 +1491,63 @@ kbd {
   font-size: 13px;
   outline: none;
 }
+/* Пошук, як ⌘F у браузері: поле з лічильником і стрілками */
+.find-field {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  padding: 0 4px 0 9px;
+  border-radius: 8px;
+  background: var(--selected);
+  flex: none;
+}
+.find-field:focus-within {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #0a84ff) 55%, transparent);
+}
+.find-field-icon {
+  color: var(--muted-text);
+  flex: none;
+}
+.find-field .find-input {
+  width: 150px;
+  height: 28px;
+  padding: 0 6px;
+  background: transparent;
+  box-shadow: none;
+}
+.find-count {
+  font-size: 12px;
+  color: var(--muted-text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding: 0 4px;
+}
+.find-step {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-text);
+}
+.find-step:hover:not(:disabled) {
+  background: var(--hover, rgba(127, 127, 127, 0.16));
+  color: inherit;
+}
+.find-step:disabled {
+  opacity: 0.35;
+}
+/* Збіги: усі жовті, поточний помаранчевий (як у Safari) */
+::highlight(find-all) {
+  background-color: rgba(255, 214, 10, 0.42);
+  color: inherit;
+}
+::highlight(find-current) {
+  background-color: #ff9f0a;
+  color: #1d1d1f;
+}
 .tv-surface {
   flex: 1;
   min-height: 0;
@@ -1620,7 +1677,7 @@ kbd {
 }
 .tv-text {
   margin: 0;
-  font-size: 16px;
+  font-size: calc(16px * var(--reading-scale, 1));
   line-height: 1.65;
   color: var(--text-primary, inherit);
   outline: none;
@@ -2818,14 +2875,14 @@ kbd {
 }
 .notice-host {
   position: fixed;
-  top: 16px;
+  bottom: 20px;
   right: 0;
   z-index: 70;
   display: flex;
   justify-content: center;
   padding: 0 16px;
   pointer-events: none;
-  transition: left 0.2s ease;
+  transition: left 0.2s ease, bottom 0.2s ease;
 }
 .notice-stack {
   display: grid;
@@ -2977,12 +3034,12 @@ kbd {
   transition: width 0.3s ease;
 }
 @keyframes notice-in {
-  from { opacity: 0; transform: translateY(-6px) scale(0.97); }
+  from { opacity: 0; transform: translateY(8px) scale(0.97); }
   to { opacity: 1; transform: none; }
 }
 @keyframes notice-out {
   from { opacity: 1; transform: none; }
-  to { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 0; transform: translateY(6px); }
 }
 @keyframes notice-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes notice-fade-out { from { opacity: 1; } to { opacity: 0; } }
@@ -3029,7 +3086,7 @@ kbd {
 }
 .doc-sheet .bn-editor {
   padding-inline: 0 !important;
-  font-size: 16px;
+  font-size: calc(16px * var(--reading-scale, 1));
   line-height: 1.65;
 }
 .doc-sheet .bn-editor > .bn-block-group {
@@ -3055,7 +3112,7 @@ kbd {
 }
 /* «Дата · Тривалість · Учасники» at the top: quieter than what was said */
 .doc-sheet .doc-facts .bn-inline-content {
-  font-size: 14px;
+  font-size: calc(14px * var(--reading-scale, 1));
   line-height: 1.6;
   color: var(--muted-text);
 }
@@ -3681,4 +3738,14 @@ kbd {
   .tpl-ed-preview {
     display: none;
   }
+}
+
+/* Settings → Вигляд → «Розмір тексту» (also ⌘+ / ⌘− / ⌘0): the transcript's
+   and the document's text sizes are multiplied by this (no zoom, so word
+   positions for clicks and highlights stay exact) */
+html[data-text-size="small"] {
+  --reading-scale: 0.9;
+}
+html[data-text-size="large"] {
+  --reading-scale: 1.15;
 }

@@ -289,9 +289,11 @@ pub fn start_reminder_loop<R: Runtime>(app: AppHandle<R>) {
 }
 
 async fn tick<R: Runtime>(app: &AppHandle<R>) {
+    // On whenever a source is set: whether to remind at all is Settings →
+    // Сповіщення → «Нарада з календаря починається»
     let (enabled, needs_refresh) = with_state(|s| {
         (
-            s.settings.enabled,
+            s.settings.ics_url.is_some() || s.dir.as_ref().map(|d| d.join(IMPORT_FILE).exists()).unwrap_or(false),
             s.last_refresh.map(|t| t.elapsed() >= REFRESH_EVERY).unwrap_or(true),
         )
     });
@@ -313,6 +315,12 @@ async fn tick<R: Runtime>(app: &AppHandle<R>) {
         (due, s.settings.bring_window_to_front)
     });
     if due.is_empty() || crate::audio::recording_commands::is_recording().await {
+        return;
+    }
+    // Settings → Сповіщення → «Нарада з календаря починається»: off means neither
+    // the macOS notification nor the «start recording?» window
+    if !crate::notifications::commands::preference(app, |p| p.show_meeting_reminders).await {
+        info!("Calendar reminder skipped: switched off in Settings → Сповіщення");
         return;
     }
 

@@ -18,11 +18,11 @@ function StatusOverlay({ show, message, sidebarCollapsed }: StatusOverlayProps) 
   if (!show) return null;
 
   return (
-    <div className="fixed bottom-4 left-0 right-0 z-10">
+    <div className="fixed bottom-4 left-0 right-0 z-10" data-notice-anchor-bottom>
       <div
         className="flex justify-center pl-8 transition-[margin] duration-300"
         style={{
-          marginLeft: sidebarCollapsed ? '90px' : '260px'
+          marginLeft: sidebarCollapsed ? '90px' : '228px'
         }}
       >
         <div className="w-2/3 max-w-[750px] flex justify-center">

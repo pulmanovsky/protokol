@@ -15,6 +15,36 @@ const EDITED_MIGRATIONS: &[(i64, &str)] = &[
     (20261106200000, "70d2a8a0421d62cf646f035636035f61931e9b0fe7d8ab52e2e18ae1cd7b1bcb693b70d914814db5ef9c60bdf81a95cb"),
 ];
 
+/// Recordings made before the Ukrainian default name are titled «New Recording»:
+/// they get «Запис DD.MM.YYYY HH:MM» from the time they were made (local time).
+/// The database is copied first (`VACUUM INTO`), next to it.
+async fn rename_english_default_titles(pool: &SqlitePool, db_path: &str) {
+    let rows: Vec<(String, String)> = match sqlx::query_as("SELECT id, created_at FROM meetings WHERE title = 'New Recording'").fetch_all(pool).await {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("Default titles not checked: {e}");
+            return;
+        }
+    };
+    if rows.is_empty() {
+        return;
+    }
+    let backup = format!("{db_path}.before-titles-{}", chrono::Utc::now().format("%Y%m%d%H%M%S"));
+    if let Err(e) = sqlx::query("VACUUM INTO ?").bind(&backup).execute(pool).await {
+        log::warn!("Default titles left as they are: no backup ({e})");
+        return;
+    }
+    for (id, created) in rows {
+        let title = chrono::DateTime::parse_from_rfc3339(&created)
+            .map(|t| format!("Запис {}", t.with_timezone(&chrono::Local).format("%d.%m.%Y %H:%M")))
+            .unwrap_or_else(|_| "Новий запис".to_string());
+        if let Err(e) = sqlx::query("UPDATE meetings SET title = ? WHERE id = ? AND title = 'New Recording'").bind(&title).bind(&id).execute(pool).await {
+            log::warn!("Title of {id} not changed: {e}");
+        }
+    }
+    log::info!("English default titles renamed (backup: {backup})");
+}
+
 async fn repair_edited_migrations(pool: &SqlitePool, migrator: &sqlx::migrate::Migrator) {
     for (version, old) in EDITED_MIGRATIONS {
         let Some(migration) = migrator.iter().find(|m| m.version == *version) else { continue };
@@ -55,6 +85,7 @@ impl DatabaseManager {
             repair_edited_migrations(&pool, &migrator).await;
             migrator.run(&pool).await?;
         }
+        rename_english_default_titles(&pool, tauri_db_path).await;
 
         Ok(DatabaseManager { pool })
     }
@@ -276,5 +307,29 @@ mod repair_tests {
         }
         assert_eq!(after, before);
         println!("tables unchanged: {after:?}");
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn english_default_titles_get_ukrainian_names_after_a_backup() {
+        let dir = std::env::temp_dir().join(format!("protokol-titles-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("m.sqlite");
+        let url = db.to_string_lossy().to_string();
+        Sqlite::create_database(&url).await.unwrap();
+        let pool = SqlitePool::connect(&url).await.unwrap();
+        sqlx::query("CREATE TABLE meetings (id TEXT PRIMARY KEY, title TEXT, created_at TEXT)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO meetings VALUES ('a', 'New Recording', '2026-11-06T19:13:26.498997+00:00'), ('b', 'Нарада 07.11.2026 08:18', '2026-11-07T06:52:09+00:00')").execute(&pool).await.unwrap();
+        rename_english_default_titles(&pool, &url).await;
+        let a: String = sqlx::query_scalar("SELECT title FROM meetings WHERE id = 'a'").fetch_one(&pool).await.unwrap();
+        let b: String = sqlx::query_scalar("SELECT title FROM meetings WHERE id = 'b'").fetch_one(&pool).await.unwrap();
+        assert!(a.starts_with("Запис 06.11.2026 "), "{a}");
+        assert_eq!(b, "Нарада 07.11.2026 08:18");
+        assert!(std::fs::read_dir(&dir).unwrap().flatten().any(|e| e.file_name().to_string_lossy().contains("before-titles")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

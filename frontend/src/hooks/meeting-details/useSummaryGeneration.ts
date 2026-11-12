@@ -269,12 +269,7 @@ export function useSummaryGeneration({
           description: 'Залишено початковий варіант документа.',
         });
       } else {
-        toast.success('Документ готовий', {
-          description: metadata.reasoningStripped
-            ? 'Документ готовий'
-            : 'Документ готовий',
-          duration: 4000,
-        });
+        toast.success('Документ готовий', { duration: 4000 });
       }
       if (meetingName && onMeetingUpdated) {
         await onMeetingUpdated();

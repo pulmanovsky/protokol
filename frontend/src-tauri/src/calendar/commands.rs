@@ -13,7 +13,7 @@ pub async fn api_calendar_status() -> Result<CalendarStatus, String> {
 #[tauri::command]
 pub async fn api_calendar_save_settings(settings: CalendarSettings) -> Result<CalendarStatus, String> {
     let saved = super::save_settings(settings)?;
-    if saved.enabled && (saved.ics_url.is_some() || super::has_imported_file()) {
+    if saved.ics_url.is_some() || super::has_imported_file() {
         super::refresh().await?;
     }
     Ok(super::status())

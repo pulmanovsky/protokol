@@ -733,6 +733,17 @@ impl SummaryService {
             }
             Err(error) => {
                 Self::update_process_failed(&pool, &meeting_id, started_at, &error).await;
+                let title: Option<String> = sqlx::query_scalar("SELECT title FROM meetings WHERE id = ?")
+                    .bind(&meeting_id)
+                    .fetch_optional(&pool)
+                    .await
+                    .ok()
+                    .flatten();
+                crate::notifications::commands::notify_when_behind(
+                    &app,
+                    crate::notifications::types::Notification::processing_failed("документ", title.as_deref()),
+                )
+                .await;
             }
         }
         Self::cleanup_cancellation_token(&meeting_id, started_at);

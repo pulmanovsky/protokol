@@ -13,7 +13,7 @@ const MainContent: React.FC<MainContentProps> = ({ children }) => {
   return (
     <main
       className={`content-area flex-1 min-w-0 h-screen overflow-hidden transition-[margin] duration-200 ${
-        isCollapsed ? 'ml-[90px]' : 'ml-[260px]'
+        isCollapsed ? 'ml-[90px]' : 'ml-[228px]'
       }`}
     >
       {children}

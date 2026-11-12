@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * One glass notice at the top centre of the content column.
+ * One glass notice at the bottom centre of the content column, above the player and the timeline.
  *
  * Drop-in replacement for the `toast` API of sonner that the app used
  * (`toast`, `.success`, `.error`, `.info`, `.warning`, `.message`, `.loading`,
@@ -352,7 +352,7 @@ function NoticeView({ notice, leaving }: { notice: Notice; leaving: boolean }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Host: centred over the content column, under the page bars          */
+/* Host: bottom centre of the content column, above the player          */
 
 interface Shown {
   notice: Notice;
@@ -378,29 +378,37 @@ export function NoticeHost({ left = 0 }: { left?: number }) {
     });
   }, [latest, settle]);
 
-  // Under the page's bars: every bar marked data-notice-anchor in the top
-  // half of the window, so a notice never covers a button
-  const [top, setTop] = useState(16);
+  // Bottom centre of the content column, above whatever is docked at the
+  // bottom (the player, the timeline when it is open, the processing pill):
+  // every element marked data-notice-anchor-bottom in the lower half
+  const [bottom, setBottom] = useState(20);
   const visible = shown.length > 0;
   useLayoutEffect(() => {
     if (!visible) return;
+    const anchors = () => Array.from(document.querySelectorAll<HTMLElement>('[data-notice-anchor-bottom]'));
     const place = () => {
-      let bottom = 0;
-      document.querySelectorAll<HTMLElement>('[data-notice-anchor]').forEach((el) => {
+      let top = window.innerHeight;
+      anchors().forEach((el) => {
         const r = el.getBoundingClientRect();
-        if (r.height > 0 && r.bottom < window.innerHeight / 2) bottom = Math.max(bottom, r.bottom);
+        if (r.height > 0 && r.top > window.innerHeight / 2) top = Math.min(top, r.top);
       });
-      setTop(bottom > 0 ? Math.round(bottom + 8) : 16);
+      setBottom(top < window.innerHeight ? Math.round(window.innerHeight - top + 12) : 20);
     };
     place();
+    // The timeline opens and closes under a notice: follow its height
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(place) : null;
+    anchors().forEach((el) => ro?.observe(el));
     window.addEventListener('resize', place);
-    return () => window.removeEventListener('resize', place);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', place);
+    };
   }, [visible, latest]);
 
   if (!visible) return null;
 
   return (
-    <div className="notice-host" style={{ left, top }}>
+    <div className="notice-host" style={{ left, bottom }}>
       <div className="notice-stack">
         {shown.map(({ notice, leaving }) => (
           <NoticeView key={notice.key} notice={notice} leaving={leaving} />

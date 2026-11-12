@@ -48,7 +48,7 @@ export function PlayerBar({ playing, current, duration, rate, speaker, looping, 
   };
 
   return (
-    <div className="player-bar flex-none border-t border-[var(--hairline,rgba(127,127,127,0.18))] px-3 py-2 flex items-center gap-2" role="group" aria-label="Програвач запису">
+    <div data-notice-anchor-bottom className="player-bar flex-none border-t border-[var(--hairline,rgba(127,127,127,0.18))] px-3 py-2 flex items-center gap-2" role="group" aria-label="Програвач запису">
       <button type="button" className="player-icon" onClick={() => onSkip(-5)} aria-label="На 5 секунд назад" title="−5 с · ←">
         <RotateCcw className="h-4 w-4" />
       </button>

@@ -649,7 +649,7 @@ const Sidebar: React.FC = () => {
 
   return (
     <aside
-      className={`sidebar fixed top-2 left-2 bottom-2 z-40 flex flex-col transition-[width] duration-200 ${isCollapsed ? 'w-[74px]' : 'w-[244px]'}`}
+      className={`sidebar fixed top-2 left-2 bottom-2 z-40 flex flex-col transition-[width] duration-200 ${isCollapsed ? 'w-[74px]' : 'w-[212px]'}`}
     >
       {/* Clean strip for the overlaid traffic lights; nothing else may sit here */}
       <div className="titlebar h-[44px] flex-shrink-0 flex items-center justify-end px-2" data-tauri-drag-region>

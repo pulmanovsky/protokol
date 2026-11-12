@@ -301,6 +301,93 @@ pub async fn notify_when_behind<R: Runtime>(app: &AppHandle<R>, notification: No
     }
 }
 
+/// The person's choice for one kind of notification (true when settings can't be read)
+pub async fn preference<R: Runtime>(
+    app: &AppHandle<R>,
+    pick: impl Fn(&crate::notifications::settings::NotificationPreferences) -> bool,
+) -> bool {
+    use tauri::Manager;
+    let Some(state) = app.try_state::<NotificationManagerState<R>>() else { return true };
+    let manager = state.read().await;
+    match manager.as_ref() {
+        Some(manager) => pick(&manager.get_settings().await.notification_preferences),
+        None => true,
+    }
+}
+
+/// Whether macOS lets «Протокол» show notifications: "allowed", "denied" or
+/// "unknown" (not asked yet, or not a bundled app)
+#[tauri::command]
+pub async fn api_notification_permission() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        tokio::task::spawn_blocking(macos_permission::status).await.unwrap_or_else(|_| "unknown".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "unknown".to_string()
+    }
+}
+
+/// «Системні параметри…»: System Settings → Notifications
+#[tauri::command]
+pub async fn api_open_notification_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.Notifications-Settings.extension")
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+mod macos_permission {
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2::msg_send;
+    use std::time::Duration;
+
+    #[link(name = "UserNotifications", kind = "framework")]
+    extern "C" {}
+
+    pub fn status() -> String {
+        // UNUserNotificationCenter needs a bundled app (a dev binary has no bundle id)
+        let bundle_id: Option<String> = unsafe {
+            let bundle: *mut AnyObject = msg_send![AnyClass::get(c"NSBundle").unwrap(), mainBundle];
+            let id: *mut AnyObject = msg_send![bundle, bundleIdentifier];
+            if id.is_null() {
+                None
+            } else {
+                let utf8: *const std::os::raw::c_char = msg_send![id, UTF8String];
+                Some(std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned())
+            }
+        };
+        if bundle_id.is_none() {
+            return "unknown".to_string();
+        }
+        let Some(class) = AnyClass::get(c"UNUserNotificationCenter") else { return "unknown".to_string() };
+        let (tx, rx) = std::sync::mpsc::channel::<isize>();
+        let block = block2::RcBlock::new(move |settings: *mut AnyObject| {
+            if !settings.is_null() {
+                let status: isize = unsafe { msg_send![settings, authorizationStatus] };
+                let _ = tx.send(status);
+            }
+        });
+        unsafe {
+            let center: *mut AnyObject = msg_send![class, currentNotificationCenter];
+            let _: () = msg_send![center, getNotificationSettingsWithCompletionHandler: &*block];
+        }
+        // UNAuthorizationStatus: 0 not determined, 1 denied, 2 authorized, 3 provisional, 4 ephemeral
+        match rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(1) => "denied",
+            Ok(2) | Ok(3) | Ok(4) => "allowed",
+            _ => "unknown",
+        }
+        .to_string()
+    }
+}
+
 /// Show recording paused notification (internal use)
 pub async fn show_recording_paused_notification(
     manager_state: &NotificationManagerState<Wry>,

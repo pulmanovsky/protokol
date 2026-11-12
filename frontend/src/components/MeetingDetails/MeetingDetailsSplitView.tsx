@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { FileText, Sparkles } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-const STORAGE_KEY = 'meetily.meetingDetails.transcriptPaneRatio';
+const STORAGE_KEY = 'protokol.meetingDetails.transcriptPaneRatio';
+/** Earlier versions kept the ratio under Meetily's name: read once */
+const OLD_STORAGE_KEY = 'meetily.meetingDetails.transcriptPaneRatio';
 const DEFAULT_RATIO = 0.32;
 const MIN_RATIO = 0.26;
 const MAX_RATIO = 0.5;
@@ -16,7 +18,14 @@ const TABS = [
 function readStoredRatio(): number {
   if (typeof window === 'undefined') return DEFAULT_RATIO;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    let raw = localStorage.getItem(STORAGE_KEY);
+    if (raw == null) {
+      raw = localStorage.getItem(OLD_STORAGE_KEY);
+      if (raw != null) {
+        localStorage.setItem(STORAGE_KEY, raw);
+        localStorage.removeItem(OLD_STORAGE_KEY);
+      }
+    }
     const n = raw == null ? NaN : Number(raw);
     return Number.isFinite(n) && n >= MIN_RATIO && n <= MAX_RATIO ? n : DEFAULT_RATIO;
   } catch {

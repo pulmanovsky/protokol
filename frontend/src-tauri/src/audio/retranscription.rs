@@ -124,6 +124,11 @@ pub async fn start_retranscription<R: Runtime>(
             );
         }
         Err(e) => {
+            crate::notifications::commands::notify_when_behind(
+                &app,
+                crate::notifications::types::Notification::processing_failed("стенограму", None),
+            )
+            .await;
             let _ = app.emit(
                 "retranscription-error",
                 RetranscriptionError {

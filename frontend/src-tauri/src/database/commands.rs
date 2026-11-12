@@ -257,13 +257,9 @@ pub async fn open_database_folder(app: AppHandle) -> Result<(), String> {
             .map_err(|e| format!("Failed to open folder: {}", e))?;
     }
 
+    // «ua.protokol.app» looks like an application to macOS: reveal a file in it
     #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&folder_path)
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
-    }
+    crate::settings_extra::reveal_in_finder(&app_data_dir)?;
 
     #[cfg(target_os = "linux")]
     {

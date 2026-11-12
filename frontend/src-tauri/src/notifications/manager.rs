@@ -298,6 +298,8 @@ impl<R: Runtime> NotificationManager<R> {
             NotificationType::RecordingPaused => settings.notification_preferences.show_recording_paused,
             NotificationType::RecordingResumed => settings.notification_preferences.show_recording_resumed,
             NotificationType::TranscriptionComplete => settings.notification_preferences.show_transcription_complete,
+            NotificationType::DocumentReady => settings.notification_preferences.show_document_ready,
+            NotificationType::ProcessingFailed => settings.notification_preferences.show_processing_failed,
             NotificationType::MeetingReminder(_) => settings.notification_preferences.show_meeting_reminders,
             NotificationType::SystemError(_) => settings.notification_preferences.show_system_errors,
             NotificationType::Test => true, // Always show test notifications

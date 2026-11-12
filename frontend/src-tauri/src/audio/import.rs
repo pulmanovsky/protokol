@@ -266,6 +266,7 @@ pub async fn start_import<R: Runtime>(
     IMPORT_CANCELLED.store(false, Ordering::SeqCst);
 
     let use_parakeet = provider.as_deref() == Some("parakeet");
+    let title_for_notice = title.clone();
     let result = run_import(
         app.clone(),
         source_path,
@@ -295,6 +296,13 @@ pub async fn start_import<R: Runtime>(
             );
         }
         Err(e) => {
+            if !IMPORT_CANCELLED.load(Ordering::SeqCst) {
+                crate::notifications::commands::notify_when_behind(
+                    &app,
+                    crate::notifications::types::Notification::processing_failed("стенограму", Some(&title_for_notice)),
+                )
+                .await;
+            }
             let _ = app.emit(
                 "import-error",
                 ImportError {

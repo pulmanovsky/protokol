@@ -8,7 +8,7 @@
      pnpm exec tauri build --target aarch64-apple-darwin --bundles app,dmg -- --features metal
    ```
 
-2. Check that no test hooks are in the build: `strings <app>/Contents/MacOS/meetily | grep PROTOKOL_TEST` must print nothing. Check the FFmpeg inside: `<app>/Contents/MacOS/ffmpeg -version` starts with `ffmpeg version <version>-protokol-lgpl` and its configuration has no `--enable-gpl`.
+2. Check that no test hooks are in the build: `strings <app>/Contents/MacOS/protokol | grep PROTOKOL_TEST` must print nothing. Check the FFmpeg inside: `<app>/Contents/MacOS/ffmpeg -version` starts with `ffmpeg version <version>-protokol-lgpl` and its configuration has no `--enable-gpl`.
 
 3. Make the update package:
 

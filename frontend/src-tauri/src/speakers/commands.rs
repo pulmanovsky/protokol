@@ -273,7 +273,8 @@ pub async fn identify_with_stop(
 
     // Labels: «Спікер N» numbered by first appearance; known voices get names
     let model = model_id(&models);
-    let known_profiles = profiles(&pool, &model).await;
+    // Settings → Пам'ять → «Упізнавати збережені голоси» off: no saved names
+    let known_profiles = if voice_recognition_on(&pool).await { profiles(&pool, &model).await } else { Vec::new() };
     let known = match_profiles(&diarization.centroids, &known_profiles);
     let role_of = |k: usize| -> Option<String> {
         let name = known.get(k).cloned().flatten()?;
@@ -577,6 +578,25 @@ pub async fn identify_with_stop(
     Ok(SpeakersResult { speakers, turns: turns.len(), seconds })
 }
 
+/// Settings → Пам'ять → «Упізнавати збережені голоси» (on unless switched off)
+pub(crate) async fn voice_recognition_on(pool: &SqlitePool) -> bool {
+    crate::database::repositories::setting::SettingsRepository::get_flag(pool, "voice_recognition").await.ok().flatten().as_deref() != Some("off")
+}
+
+#[tauri::command]
+pub async fn api_voice_recognition_get<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
+    let pool = pool(&app).map_err(|e| e.to_string())?;
+    Ok(voice_recognition_on(&pool).await)
+}
+
+#[tauri::command]
+pub async fn api_voice_recognition_set<R: Runtime>(app: AppHandle<R>, on: bool) -> Result<(), String> {
+    let pool = pool(&app).map_err(|e| e.to_string())?;
+    crate::database::repositories::setting::SettingsRepository::set_flag(&pool, "voice_recognition", if on { "on" } else { "off" })
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Gives a speaker of a meeting a name: the transcript is relabelled and the
 /// voice is remembered for later meetings (except for «Я» and «?» names).
 pub async fn rename<R: Runtime>(app: &AppHandle<R>, meeting_id: &str, current: &str, name: &str) -> Result<()> {
@@ -609,7 +629,7 @@ pub async fn rename_with(pool: &SqlitePool, model: &str, meeting_id: &str, curre
     let label: String = row.get("label");
     let centroid = from_blob(row.get::<Vec<u8>, _>("centroid").as_slice());
     sqlx::query("UPDATE meeting_speakers SET name = ?, suggested = NULL WHERE meeting_id = ? AND label = ?").bind(name).bind(meeting_id).bind(&label).execute(&pool).await?;
-    if label == ME_LABEL || centroid.is_empty() {
+    if label == ME_LABEL || centroid.is_empty() || !voice_recognition_on(&pool).await {
         return Ok(());
     }
     let existing = sqlx::query("SELECT embedding, meetings FROM voice_profiles WHERE name = ? AND model = ?").bind(name).bind(model).fetch_optional(&pool).await?;

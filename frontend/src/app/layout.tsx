@@ -60,7 +60,7 @@ function ConditionalImportDialog({
 /** Notices sit over the content column, so they follow the sidebar width */
 function NoticeLayer({ onboarding }: { onboarding: boolean }) {
   const { isCollapsed } = useSidebar();
-  return <NoticeHost left={onboarding ? 0 : isCollapsed ? 90 : 260} />;
+  return <NoticeHost left={onboarding ? 0 : isCollapsed ? 90 : 228} />;
 }
 
 // export { metadata } from './metadata'
@@ -276,9 +276,16 @@ function MainLayout({
     const openFile = (e: Event) => handleOpenImportDialog((e as CustomEvent<string>).detail);
     window.addEventListener('protokol:menu-import', open);
     window.addEventListener('protokol:test-import', openFile);
+    // Test runs only: a notice of a given kind, to check where notices appear
+    const testNotice = (e: Event) => {
+      const { kind = 'success', title = '', description } = (e as CustomEvent<{ kind?: 'success' | 'info' | 'warning' | 'error'; title?: string; description?: string }>).detail ?? {};
+      toast[kind](title, description ? { description } : undefined);
+    };
+    window.addEventListener('protokol:test-notice', testNotice);
     return () => {
       window.removeEventListener('protokol:menu-import', open);
       window.removeEventListener('protokol:test-import', openFile);
+      window.removeEventListener('protokol:test-notice', testNotice);
     };
   }, [handleOpenImportDialog]);
 

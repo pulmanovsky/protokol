@@ -118,38 +118,6 @@ export function CalendarSettings() {
 
   return (
     <div className="flex flex-col gap-6">
-      <SettingsGroup help="Перед кожною зустріччю з календаря застосунок покаже нагадування і запропонує увімкнути запис.">
-        <SettingsRow label="Нагадувати про зустрічі">
-          <Switch
-            checked={settings.enabled}
-            disabled={busy}
-            onCheckedChange={(enabled) => save({ enabled }, enabled ? 'Нагадування увімкнено' : undefined)}
-          />
-        </SettingsRow>
-        <SettingsRow label="Нагадувати за" htmlFor="remind-before">
-          <select
-            id="remind-before"
-            value={settings.remind_minutes_before}
-            disabled={busy}
-            onChange={(e) => save({ remind_minutes_before: Number(e.target.value) })}
-            className="h-7 px-2 text-[13px]"
-          >
-            {REMIND_OPTIONS.map((m) => (
-              <option key={m} value={m}>
-                {m === 0 ? 'на початку' : `${m} хв`}
-              </option>
-            ))}
-          </select>
-        </SettingsRow>
-        <SettingsRow label="Показувати вікно поверх інших">
-          <Switch
-            checked={settings.bring_window_to_front}
-            disabled={busy}
-            onCheckedChange={(bring_window_to_front) => save({ bring_window_to_front })}
-          />
-        </SettingsRow>
-      </SettingsGroup>
-
       <SettingsGroup
         title="Джерело календаря"
         help={
@@ -233,6 +201,31 @@ export function CalendarSettings() {
             <RefreshCw size={13} className={busy ? 'animate-spin' : ''} />
             Оновити
           </button>
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup title="Перед нарадою" help="Перед кожною зустріччю з календаря з'являється нагадування з пропозицією почати запис. Чи нагадувати взагалі, задається в «Сповіщеннях».">
+        <SettingsRow label="Нагадувати за" htmlFor="remind-before">
+          <select
+            id="remind-before"
+            value={settings.remind_minutes_before}
+            disabled={busy}
+            onChange={(e) => save({ remind_minutes_before: Number(e.target.value) })}
+            className="h-7 px-2 text-[13px]"
+          >
+            {REMIND_OPTIONS.map((m) => (
+              <option key={m} value={m}>
+                {m === 0 ? 'на початку' : `${m} хв`}
+              </option>
+            ))}
+          </select>
+        </SettingsRow>
+        <SettingsRow label="Показувати вікно поверх інших">
+          <Switch
+            checked={settings.bring_window_to_front}
+            disabled={busy}
+            onCheckedChange={(bring_window_to_front) => save({ bring_window_to_front })}
+          />
         </SettingsRow>
       </SettingsGroup>
     </div>

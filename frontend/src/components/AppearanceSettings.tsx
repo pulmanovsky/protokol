@@ -1,6 +1,8 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { Sun, Moon, Monitor } from 'lucide-react';
+import { setTextSize, textSize, TextSize, TEXT_SIZE_EVENT } from '@/lib/uiPrefs';
 import { useTheme, ThemeMode } from '@/contexts/ThemeContext';
 
 const OPTIONS: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
@@ -9,8 +11,21 @@ const OPTIONS: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: 'system', label: 'Як у системі', icon: Monitor },
 ];
 
+const SIZES: { value: TextSize; label: string }[] = [
+  { value: 'small', label: 'Менший' },
+  { value: 'normal', label: 'Звичайний' },
+  { value: 'large', label: 'Більший' },
+];
+
 export function AppearanceSettings() {
   const { mode, setMode } = useTheme();
+  const [size, setSize] = useState<TextSize>('normal');
+  useEffect(() => {
+    setSize(textSize());
+    const on = (e: Event) => setSize((e as CustomEvent<TextSize>).detail);
+    window.addEventListener(TEXT_SIZE_EVENT, on);
+    return () => window.removeEventListener(TEXT_SIZE_EVENT, on);
+  }, []);
 
   return (
     <div className="flex flex-col gap-2">
@@ -38,6 +53,34 @@ export function AppearanceSettings() {
       <p className="settings-help">
         «Як у системі» перемикає світлу й темну тему разом із macOS. Скло вікна теж підлаштовується під тему.
       </p>
+      <div className="settings-list mt-4">
+        <div className="settings-row">
+          <span id="appearance-text-size" className="flex flex-col min-w-0">
+            <span>Розмір тексту</span>
+            <span className="text-xs text-[color:var(--muted-text)]">Стенограма і документ. Також ⌘+, ⌘− і ⌘0 у меню «Вигляд»</span>
+          </span>
+          <div role="radiogroup" aria-labelledby="appearance-text-size" className="segmented flex gap-0.5">
+            {SIZES.map(({ value, label }) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={size === value}
+                data-active={size === value}
+                onClick={() => setTextSize(value)}
+                className="segmented-item h-7 px-3 flex items-center text-[13px] font-medium"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="settings-row">
+          <p className="m-0 leading-[1.65]" style={{ fontSize: 'calc(16px * var(--reading-scale, 1))' }}>
+            Так виглядатиме текст стенограми й документа.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
