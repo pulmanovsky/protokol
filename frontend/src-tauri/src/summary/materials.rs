@@ -1138,6 +1138,8 @@ const SHORT_SPEECH_WORDS: usize = 150;
 /// A lost number comes back: at most this many in one point, this many new points in a block
 const NUMBERS_PER_POINT: usize = 2;
 const NEW_NUMBER_POINTS: usize = 2;
+/// Words a number brings back when it joins a point made from its line
+const APPENDED_WORDS: usize = 9;
 
 /// A greeting, thanks, a roll call, a remark about sound: nothing for the minutes
 fn is_service_remark(sentence: &str) -> bool {
@@ -1233,9 +1235,40 @@ fn fragment_around(sentence: &str, number: &str, most: usize) -> String {
     words[from..to].join(" ").trim_end_matches([',', ';', ':', '.']).to_string()
 }
 
+/// Words that open a clause which cannot stand alone («, який переводиться
+/// з філії 4512»): it hangs on the clause before
+const DEPENDENT_OPENERS: &[&str] = &[
+    "який", "яка", "яке", "які", "якого", "якої", "якому", "якій", "яким", "якими", "яких", "котрий", "котра", "котре", "котрі",
+    "чий", "чия", "чиє", "чиї", "де", "куди", "звідки", "що", "щоб", "бо", "оскільки",
+];
+
+fn first_word(text: &str) -> String {
+    text.split_whitespace().next().map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()).unwrap_or_default()
+}
+
+fn hangs_on_previous(clause: &str) -> bool {
+    DEPENDENT_OPENERS.contains(&first_word(clause).as_str())
+}
+
+/// «Також …», «А …» at the start of a point read as a cut from the middle
+fn without_leading_link(text: &str) -> &str {
+    let mut t = text.trim_start();
+    for _ in 0..2 {
+        let w = first_word(t);
+        if ["також", "і", "й", "та", "а"].contains(&w.as_str()) && t.split_whitespace().count() > 3 {
+            t = t[t.find(char::is_whitespace).unwrap_or(t.len())..].trim_start();
+        } else {
+            break;
+        }
+    }
+    t
+}
+
 /// The part of a said sentence that carries `number`, readable on its own:
 /// whole clauses (between commas), never a cut in the middle of one. Up to
-/// `most` words; a clause longer than that is cut around the number.
+/// `most` words; a clause longer than that is cut around the number. A
+/// clause that hangs on the one before («який …», «що …») always takes it,
+/// even past `most`.
 fn clause_around(sentence: &str, number: &str, most: usize) -> String {
     let clean = clean_spoken(sentence.trim());
     // «, » and «; » only: «4,5» is one number
@@ -1246,7 +1279,10 @@ fn clause_around(sentence: &str, number: &str, most: usize) -> String {
         return fragment_around(clauses[at], number, most);
     }
     let (mut from, mut to) = (at, at);
-    let mut words = count(clauses[at]);
+    while from > 0 && hangs_on_previous(clauses[from]) {
+        from -= 1;
+    }
+    let mut words: usize = clauses[from..=to].iter().map(|c| count(c)).sum();
     // The clause before first (it usually says what the number is about), then the one after
     loop {
         let mut grew = false;
@@ -1265,11 +1301,11 @@ fn clause_around(sentence: &str, number: &str, most: usize) -> String {
         }
     }
     let text = clauses[from..=to].join(", ");
-    let text = text.trim_end_matches(['.', '!', '?', '…', ':']).to_string();
-    let mut c = text.chars();
-    match c.next() {
-        Some(f) if from == 0 => f.to_uppercase().chain(c).collect(),
-        _ => text,
+    let text = without_leading_link(text.trim_end_matches(['.', '!', '?', '…', ':']));
+    if from == 0 {
+        capitalised(text)
+    } else {
+        text.to_string()
     }
 }
 
@@ -1300,8 +1336,10 @@ pub(crate) fn keep_numbers(points: &str, lines: &[(u32, String)]) -> (String, Nu
                 }
                 seen.push(f.text.clone());
                 let place = out.iter().enumerate().position(|(i, p)| p.contains(&mark) && grown.get(i).copied().unwrap_or(NUMBERS_PER_POINT) < NUMBERS_PER_POINT);
-                if let Some(i) = place {
-                    let phrase = clause_around(sentence, &f.text, 9);
+                let phrase = clause_around(sentence, &f.text, APPENDED_WORDS);
+                // A whole thought too long to tack on is a point of its own
+                let own = phrase.split_whitespace().count() > APPENDED_WORDS && kept.added < NEW_NUMBER_POINTS;
+                if let (Some(i), false) = (place, own) {
                     // Already there word for word (another number of the same clause)
                     if out[i].contains(&phrase) {
                         kept.appended += 1;
@@ -1313,7 +1351,7 @@ pub(crate) fn keep_numbers(points: &str, lines: &[(u32, String)]) -> (String, Nu
                     grown[i] += 1;
                     kept.appended += 1;
                 } else if kept.added < NEW_NUMBER_POINTS {
-                    out.push(format!("- {}{mark}", clause_around(sentence, &f.text, 18)));
+                    out.push(format!("- {}{mark}", capitalised(&clause_around(sentence, &f.text, 18))));
                     grown.push(0);
                     kept.added += 1;
                 } else {
@@ -2279,6 +2317,16 @@ mod tests {
             Some("- Після завтрашнього дня, тобто з 14 листопада, у нас запускається по плану новий процес обліку складу; як ми це робили попередні 4,5 роки [01:26]")
         );
         assert!(text.lines().all(|l| !l.contains("дослівно")));
+        // A clause that hangs on the one before («який …») never comes back
+        // alone: here the whole thought is a point of its own
+        let said = vec![(236, "Також підготовка попередніх даних для ремонту обладнання, яке надійшло з філії 4512, для оформлення кошторису на ремонт.".to_string())];
+        let (text, kept) = keep_numbers("- Зустрічі з новими працівниками відділу [03:56]", &said);
+        assert_eq!(kept, NumbersKept { appended: 0, added: 1, left: 0 });
+        assert_eq!(
+            text,
+            "- Зустрічі з новими працівниками відділу [03:56]\n- Підготовка попередніх даних для ремонту обладнання, яке надійшло з філії 4512, для оформлення кошторису на ремонт [03:56]"
+        );
+        assert_eq!(clause_around("Техніка, яка прибула 12 числа, на складі.", "12", 9), "Техніка, яка прибула 12 числа, на складі");
         // A number said in words backs the digits; one nobody said is marked
         let said = super::super::numbers::Said::of("отримали двадцять генераторів");
         let (text, n) = mark_unbacked_numbers("- Отримали 20 генераторів [00:10]\n- Отримали 35 генераторів [00:20]", &said, &said);

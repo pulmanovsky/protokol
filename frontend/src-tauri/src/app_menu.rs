@@ -5,8 +5,16 @@
 //! Controls), View, Window and Help. The app's name is declined as Apple does
 //! («Вийти з Нотаток»): «Сховати Протокол», «Вийти з Протоколу».
 
-use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+use std::sync::Mutex;
+
+use tauri::menu::{Menu, MenuId, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, SubmenuBuilder};
 use tauri::{AppHandle, Manager, Runtime};
+
+const WINDOW_MENU: &str = "menu_window";
+const MEET_WINDOW_ITEM: &str = "menu_window_meet";
+const MAIN_WINDOW_ITEM: &str = "menu_window_main";
+/// The separator above «Google Meet» in «Вікно», while the Meet window is open
+static MEET_SEPARATOR: Mutex<Option<MenuId>> = Mutex::new(None);
 
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let item = |id: &str, text: &str, key: Option<&str>| {
@@ -54,6 +62,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&item("menu_record_stop", "Завершити запис", None)?)
         .separator()
         .item(&item("menu_mic", "Вимкнути або увімкнути мікрофон", Some("CmdOrCtrl+Shift+M"))?)
+        .separator()
+        .item(&item("menu_meet", "Відкрити Google Meet", Some("CmdOrCtrl+Shift+G"))?)
         .build()?;
     let view = SubmenuBuilder::new(app, "Вигляд")
         .item(&item("menu_sidebar", "Показати або сховати бічну панель", Some("Cmd+Ctrl+S"))?)
@@ -67,7 +77,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .separator()
         .item(&PredefinedMenuItem::fullscreen(app, Some("На весь екран"))?)
         .build()?;
-    let window = SubmenuBuilder::new(app, "Вікно")
+    let window = SubmenuBuilder::with_id(app, WINDOW_MENU, "Вікно")
         .item(&PredefinedMenuItem::minimize(app, Some("Згорнути"))?)
         .item(&PredefinedMenuItem::maximize(app, Some("Масштабувати"))?)
         .build()?;
@@ -83,6 +93,37 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 }
 
 const PROJECT: &str = "https://github.com/pulmanovsky/protokol";
+
+/// «Вікно» lists the main window and «Google Meet» while the Meet window is
+/// open, to switch between them
+pub fn show_meet_window_item<R: Runtime>(app: &AppHandle<R>, open: bool) {
+    let Some(menu) = app.menu() else { return };
+    let Some(MenuItemKind::Submenu(window)) = menu.get(WINDOW_MENU) else { return };
+    let present = window.get(MEET_WINDOW_ITEM);
+    if open && present.is_none() {
+        if let Ok(sep) = PredefinedMenuItem::separator(app) {
+            if window.append(&sep).is_ok() {
+                *MEET_SEPARATOR.lock().unwrap() = Some(sep.id().clone());
+            }
+        }
+        for (id, text) in [(MAIN_WINDOW_ITEM, "Протокол"), (MEET_WINDOW_ITEM, "Google Meet")] {
+            if let Ok(item) = MenuItemBuilder::with_id(id, text).build(app) {
+                let _ = window.append(&item);
+            }
+        }
+    } else if !open {
+        for id in [MAIN_WINDOW_ITEM, MEET_WINDOW_ITEM] {
+            if let Some(item) = window.get(id) {
+                let _ = window.remove(&item);
+            }
+        }
+        if let Some(id) = MEET_SEPARATOR.lock().unwrap().take() {
+            if let Some(sep) = window.get(&id) {
+                let _ = window.remove(&sep);
+            }
+        }
+    }
+}
 
 /// What the menu's own items do (the system's items work by themselves)
 pub fn on_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
@@ -128,6 +169,16 @@ pub fn on_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
                 }
                 let muted = crate::audio::recording_commands::get_mic_muted().await;
                 let _ = crate::audio::recording_commands::set_mic_muted(app, !muted).await;
+            });
+            return;
+        }
+        "menu_meet" | MEET_WINDOW_ITEM => {
+            // Builds webviews: not on the main thread, where menu events run
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = crate::meet::open(&app, None, None) {
+                    log::warn!("Meet: {e}");
+                }
             });
             return;
         }

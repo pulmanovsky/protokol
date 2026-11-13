@@ -88,11 +88,12 @@ export function useRecordingStop(
   // Set up recording-stopped listener for meeting navigation
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;
+    let cancelled = false;
 
     const setupRecordingStoppedListener = async () => {
       try {
         console.log('Setting up recording-stopped listener for navigation...');
-        unlistenFn = await listen<{
+        const fn = await listen<{
           message: string;
           folder_path?: string;
           meeting_name?: string;
@@ -111,6 +112,9 @@ export function useRecordingStop(
           })();
 
         });
+        // Cleaned up before `listen` resolved: this one must not stay behind
+        if (cancelled) fn();
+        else unlistenFn = fn;
         console.log('Recording stopped listener setup complete');
       } catch (error) {
         console.error('Failed to setup recording stopped listener:', error);
@@ -121,6 +125,7 @@ export function useRecordingStop(
 
     return () => {
       console.log('Cleaning up recording stopped listener...');
+      cancelled = true;
       if (unlistenFn) {
         unlistenFn();
       }

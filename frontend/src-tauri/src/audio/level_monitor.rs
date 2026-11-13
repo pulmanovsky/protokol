@@ -138,29 +138,10 @@ impl AudioLevelMonitor {
 
     /// Find a CPAL device by name
     fn find_device_by_name(&self, host: &cpal::Host, device_name: &str) -> Result<cpal::Device> {
-        // Try input devices first
-        if let Ok(input_devices) = host.input_devices() {
-            for device in input_devices {
-                if let Ok(name) = device.name() {
-                    if name == device_name {
-                        return Ok(device);
-                    }
-                }
-            }
-        }
-
-        // Try output devices
-        if let Ok(output_devices) = host.output_devices() {
-            for device in output_devices {
-                if let Ok(name) = device.name() {
-                    if name == device_name {
-                        return Ok(device);
-                    }
-                }
-            }
-        }
-
-        Err(anyhow::anyhow!("Device not found: {}", device_name))
+        // By name, without opening every device (devices/lookup.rs)
+        crate::audio::devices::lookup::device_by_name(host, device_name, true)
+            .or_else(|| crate::audio::devices::lookup::device_by_name(host, device_name, false))
+            .ok_or_else(|| anyhow::anyhow!("Device not found: {}", device_name))
     }
 
     /// Create an audio stream for level monitoring

@@ -2,7 +2,8 @@
 
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { MeetAccountsDialog, accountsSummary, useMeetAccounts } from '@/components/MeetAccounts';
 import { ChevronRight } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { SettingsGroup, SettingsRow } from '@/components/settings/SettingsGroup';
@@ -27,6 +28,13 @@ function LinkRow({ title, sub, count, onClick }: { title: string; sub: string; c
 /** Settings → Пам'ять: what the app learned from corrections and approvals */
 export function MemorySettings() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // «Керувати в «Пам'яті»» (Settings → Google Meet) opens the accounts at once
+  const [accountsOpen, setAccountsOpen] = useState(false);
+  const { accounts, reload: reloadAccounts } = useMeetAccounts();
+  useEffect(() => {
+    if (searchParams.get('accounts') === '1') setAccountsOpen(true);
+  }, [searchParams]);
   const [voiceOn, setVoiceOn] = useState<boolean | null>(null);
   const [people, setPeople] = useState<number | null>(null);
   const [words, setWords] = useState<number | null>(null);
@@ -79,7 +87,20 @@ export function MemorySettings() {
           count={n(people, 'людина', 'людини', 'людей')}
           onClick={() => router.push('/templates?people=1')}
         />
+        <LinkRow
+          title="Облікові записи Google Meet"
+          sub="Хто з людей сидить під яким обліковим записом Meet"
+          count={accountsSummary(accounts)}
+          onClick={() => setAccountsOpen(true)}
+        />
       </SettingsGroup>
+      <MeetAccountsDialog
+        open={accountsOpen}
+        onOpenChange={(open) => {
+          setAccountsOpen(open);
+          if (!open) void reloadAccounts();
+        }}
+      />
 
       <SettingsGroup title="Написання" help="Правило створюється, коли ви виправляєте слово в стенограмі. Нові записи виправляються за ним автоматично, такі місця позначено.">
         <LinkRow

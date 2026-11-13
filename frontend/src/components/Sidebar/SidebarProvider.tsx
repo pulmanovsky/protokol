@@ -4,6 +4,7 @@ import React, { useRef, createContext, useContext, useState, useEffect } from 'r
 import { usePathname, useRouter } from 'next/navigation';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import type { SummaryProcessResponse } from '@/types';
 
@@ -97,8 +98,10 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   // Extract fetchMeetings as a reusable function
+  // The meetings list for the sidebar, Сьогодні and Записи. Not tied to any
+  // state: a copy of it kept by an older handler must fetch just the same.
   const fetchMeetings = React.useCallback(async () => {
-    if (serverAddress) {
+    {
       try {
         const meetings = await invoke('api_get_meetings') as Array<{ id: string, title: string, created_at?: string, status?: string, duration_seconds?: number | null }>;
         const transformedMeetings = meetings.map((meeting: any) => ({
@@ -116,11 +119,30 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
         Analytics.trackBackendConnection(false, error instanceof Error ? error.message : 'невідома помилка');
       }
     }
-  }, [serverAddress]);
+  }, []);
 
   useEffect(() => {
     fetchMeetings();
-  }, [serverAddress, fetchMeetings]);
+  }, [fetchMeetings]);
+
+  // A meeting saved anywhere (a stop from the Meet window, the panel, the
+  // menu bar, an import): the lists show it at once
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    listen('meetings-changed', () => {
+      fetchMeetings();
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((e) => console.error('meetings-changed listener failed', e));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [fetchMeetings]);
 
   useEffect(() => {
     const fetchSettings = async () => {

@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { usePathname, useRouter } from 'next/navigation';
 import { SourcePicker } from '@/components/audio/SourcePicker';
+import { isMeetUrl, openMeet, useMeetSettings } from '@/lib/meet';
 import {
   Dialog,
   DialogContent,
@@ -42,6 +43,7 @@ export function CalendarReminder() {
   const [reminder, setReminder] = useState<ReminderPayload | null>(null);
   const pathname = usePathname();
   const router = useRouter();
+  const meetSettings = useMeetSettings();
 
   useEffect(() => {
     const unlisten = listen<ReminderPayload>('calendar-meeting-reminder', (e) => setReminder(e.payload));
@@ -56,7 +58,12 @@ export function CalendarReminder() {
     setReminder(null);
     if (openCall && event.meeting_url) {
       try {
-        await invoke('open_external_url', { url: event.meeting_url });
+        // A Google Meet link opens in Protokol's own Meet window (Settings → Google Meet)
+        if (inApp) {
+          await openMeet(event.meeting_url, event.title);
+        } else {
+          await invoke('open_external_url', { url: event.meeting_url });
+        }
       } catch (error) {
         console.error('Failed to open meeting link', error);
       }
@@ -71,6 +78,7 @@ export function CalendarReminder() {
   };
 
   const event = reminder?.event;
+  const inApp = isMeetUrl(event?.meeting_url) && meetSettings.openInApp;
   const when =
     reminder && reminder.minutes_until > 0
       ? `Починається через ${reminder.minutes_until} хв`
@@ -113,7 +121,7 @@ export function CalendarReminder() {
             className="record-button justify-center h-12 gap-2.5 text-[15px] font-semibold"
           >
             <span className="w-2.5 h-2.5 rounded-full bg-[#fff]" aria-hidden="true" />
-            {event?.meeting_url ? 'Відкрити дзвінок і записувати' : 'Почати запис'}
+            {inApp ? 'Приєднатися в Протоколі і записувати' : event?.meeting_url ? 'Відкрити дзвінок і записувати' : 'Почати запис'}
           </button>
           <div className="grid grid-cols-2 gap-2">
             {event?.meeting_url ? (

@@ -124,15 +124,12 @@ pub async fn get_device_and_config(
 
         match audio_device.device_type {
             DeviceType::Input => {
-                for device in host.input_devices()? {
-                    if let Ok(name) = device.name() {
-                        if name == audio_device.name {
-                            let default_config = device
-                                .default_input_config()
-                                .map_err(|e| anyhow!("Failed to get default input config: {}", e))?;
-                            return Ok((device, default_config));
-                        }
-                    }
+                // By name, without opening every device (devices/lookup.rs)
+                if let Some(device) = super::lookup::device_by_name(&host, &audio_device.name, true) {
+                    let default_config = device
+                        .default_input_config()
+                        .map_err(|e| anyhow!("Failed to get default input config: {}", e))?;
+                    return Ok((device, default_config));
                 }
             }
             DeviceType::Output => {
@@ -140,15 +137,11 @@ pub async fn get_device_and_config(
                 {
                     // Use default host for all macOS output devices
                     // Core Audio backend uses direct cidre API for system capture, not cpal
-                    for device in host.output_devices()? {
-                        if let Ok(name) = device.name() {
-                            if name == audio_device.name {
-                                let default_config = device
-                                    .default_output_config()
-                                    .map_err(|e| anyhow!("Failed to get output config: {}", e))?;
-                                return Ok((device, default_config));
-                            }
-                        }
+                    if let Some(device) = super::lookup::device_by_name(&host, &audio_device.name, false) {
+                        let default_config = device
+                            .default_output_config()
+                            .map_err(|e| anyhow!("Failed to get output config: {}", e))?;
+                        return Ok((device, default_config));
                     }
                 }
 

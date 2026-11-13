@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useEffect } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import React, { useEffect, useRef } from 'react';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useRecordingStop } from '@/hooks/useRecordingStop';
 
 /**
@@ -27,35 +27,36 @@ export function RecordingPostProcessingProvider({ children }: { children: React.
     handleRecordingStop,
   } = useRecordingStop(setIsRecording, setIsRecordingDisabled);
 
+  // The latest handler, so the one listener below always calls the current
+  // one (with the current meeting list refresh, not the one from the first
+  // render, when the list could not be fetched yet)
+  const handlerRef = useRef(handleRecordingStop);
   useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
-
-    const setupListener = async () => {
-      try {
-        // Listen for recording-stop-complete event from Rust
-        unlistenFn = await listen<boolean>('recording-stop-complete', (event) => {
-          console.log('[RecordingPostProcessing] Received recording-stop-complete event:', event.payload);
-
-          // Call the post-processing handler
-          // event.payload is the callApi boolean (true for normal stops)
-          handleRecordingStop(event.payload);
-        });
-
-        console.log('[RecordingPostProcessing] Event listener set up successfully');
-      } catch (error) {
-        console.error('[RecordingPostProcessing] Failed to set up event listener:', error);
-      }
-    };
-
-    setupListener();
-
-    return () => {
-      if (unlistenFn) {
-        console.log('[RecordingPostProcessing] Cleaning up event listener');
-        unlistenFn();
-      }
-    };
+    handlerRef.current = handleRecordingStop;
   }, [handleRecordingStop]);
+
+  // One listener for the life of the window. A listener set up again on
+  // every render used to stay behind when the cleanup ran before `listen`
+  // resolved; the oldest of them then saved the recording without
+  // refreshing the lists.
+  useEffect(() => {
+    let cancelled = false;
+    let unlistenFn: UnlistenFn | undefined;
+    listen<boolean>('recording-stop-complete', (event) => {
+      console.log('[RecordingPostProcessing] Received recording-stop-complete event:', event.payload);
+      // event.payload is the callApi boolean (true for normal stops)
+      handlerRef.current(event.payload);
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlistenFn = fn;
+      })
+      .catch((error) => console.error('[RecordingPostProcessing] Failed to set up event listener:', error));
+    return () => {
+      cancelled = true;
+      unlistenFn?.();
+    };
+  }, []);
 
   return <>{children}</>;
 }

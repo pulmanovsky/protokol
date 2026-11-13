@@ -114,7 +114,13 @@ pub async fn verify_microphone_access() -> anyhow::Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
-    tokio::task::spawn_blocking(|| {
+    const NO_ACCESS: &str = "Протокол не має доступу до мікрофона. Дозвольте його: Системні параметри → Конфіденційність і безпека → Мікрофон.";
+    if super::lookup::microphone_permission() == Some(false) {
+        return Err(anyhow::anyhow!(NO_ACCESS));
+    }
+    // Not asked yet: macOS shows its question and the check waits for the
+    // answer, but not without end
+    let check = tokio::task::spawn_blocking(|| {
         let host = cpal::default_host();
         let Some(device) = host.default_input_device() else {
             // Let device resolution handle the existing system-audio-only fallback.
@@ -155,11 +161,12 @@ pub async fn verify_microphone_access() -> anyhow::Result<()> {
         }
 
         drop(stream);
-        Err(anyhow::anyhow!(
-            "Microphone permission not granted. Please allow microphone access in \
-             System Settings > Privacy & Security > Microphone, then try again."
-        ))
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("Microphone verification task failed: {}", e))?
+        Err(anyhow::anyhow!(NO_ACCESS))
+    });
+    match tokio::time::timeout(std::time::Duration::from_secs(60), check).await {
+        Ok(joined) => joined.map_err(|e| anyhow::anyhow!("Microphone verification task failed: {}", e))?,
+        Err(_) => Err(anyhow::anyhow!(
+            "Немає відповіді на запит доступу до мікрофона. Дозвольте доступ у запиті macOS або: Системні параметри → Конфіденційність і безпека → Мікрофон."
+        )),
+    }
 }

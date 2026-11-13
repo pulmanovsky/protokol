@@ -25,17 +25,8 @@ impl SystemAudioCapture {
 
     pub fn list_system_devices() -> Result<Vec<String>> {
         let host = cpal::default_host();
-        let devices = host.output_devices()
-            .map_err(|e| anyhow::anyhow!("Failed to enumerate output devices: {}", e))?;
-
-        let mut device_names = Vec::new();
-        for device in devices {
-            if let Ok(name) = device.name() {
-                device_names.push(name);
-            }
-        }
-
-        Ok(device_names)
+        // Each device checked with a time limit (devices/lookup.rs)
+        Ok(crate::audio::devices::lookup::device_names(&host, false))
     }
 
     pub fn start_system_audio_capture(&self) -> Result<SystemAudioStream> {

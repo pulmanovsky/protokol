@@ -9,6 +9,8 @@ pub const ME: usize = usize::MAX;
 /// Microphone level (RMS × 10 000) that counts as speech
 const MIC_SPEECH_LEVEL: u16 = 150;
 const MIN_GAP_S: f64 = 0.5;
+/// Shorter bursts on the microphone are noise (a cough, a chair, the room)
+const MIN_TURN_S: f64 = 0.4;
 
 /// Turns of the local speaker: the microphone carries speech and clearly
 /// more energy than the call (headphones keep the call out of the mic).
@@ -28,7 +30,10 @@ pub fn me_turns(levels: &ChannelLevels) -> Vec<Turn> {
             _ => turns.push(Turn { start: t, end: t + step, speaker: ME }),
         }
     }
-    super::diarize::smooth_turns(turns)
+    // Dropped, not joined to a turn far away: a few noise bursts during a
+    // guest's report once made one «Я» turn of the whole report
+    turns.retain(|t| t.end - t.start >= MIN_TURN_S - 1e-9);
+    turns
 }
 
 /// Puts the local speaker's turns over the call's turns: where «Я» speaks,
@@ -76,5 +81,30 @@ mod tests {
         let call = vec![Turn { start: 0.0, end: 1.0, speaker: 0 }];
         let all = overlay(&call, &me);
         assert_eq!(all.iter().map(|t| t.speaker).collect::<Vec<_>>(), vec![ME, 0]);
+    }
+
+    #[test]
+    fn noise_bursts_do_not_take_a_guest_report() {
+        // 400 s at 100 ms: the user speaks 8–9 s; a guest talks on the call
+        // 90–330 s; the room makes 0.2 s bursts on the microphone in the
+        // guest's pauses
+        let n = 4000;
+        let mut mic = vec![20u16; n];
+        let mut system = vec![10u16; n];
+        (80..90).for_each(|i| mic[i] = 900);
+        (900..3300).for_each(|i| system[i] = 800);
+        for at in [950usize, 2000, 3000, 3290] {
+            (at..at + 2).for_each(|i| {
+                mic[i] = 400;
+                system[i] = 10;
+            });
+        }
+        let me = me_turns(&ChannelLevels { step_ms: 100, mic, system });
+        assert_eq!(me.len(), 1);
+        assert!(me[0].end < 10.0);
+        let call = vec![Turn { start: 90.0, end: 330.0, speaker: 0 }];
+        let all = overlay(&call, &me);
+        let guest: f64 = all.iter().filter(|t| t.speaker == 0).map(|t| t.end - t.start).sum();
+        assert!((guest - 240.0).abs() < 1e-6, "guest kept {guest} s");
     }
 }

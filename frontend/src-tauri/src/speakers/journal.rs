@@ -54,7 +54,7 @@ const SIDE: &[(&str, &str)] = &[
     ("segment_edits", "kind, at, created_at"),
     ("segment_reviews", "start, end, created_at"),
     ("segment_exclusions", "start, end, created_at"),
-    ("meeting_speakers", "label, name, hex(centroid) AS centroid, speech_seconds, role, suggested"),
+    ("meeting_speakers", "label, name, hex(centroid) AS centroid, speech_seconds, role, suggested, meet_name, name_source"),
 ];
 
 pub async fn capture(pool: &SqlitePool, meeting_id: &str) -> Result<State> {
@@ -236,16 +236,20 @@ async fn restore(pool: &SqlitePool, meeting_id: &str, state: &State) -> Result<V
             for r in rows {
                 let hex = r["centroid"].as_str().unwrap_or("");
                 let centroid: Vec<u8> = (0..hex.len() / 2).filter_map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok()).collect();
-                sqlx::query("INSERT INTO meeting_speakers (meeting_id, label, name, centroid, speech_seconds, role, suggested) VALUES (?, ?, ?, ?, ?, ?, ?)")
-                    .bind(meeting_id)
-                    .bind(r["label"].as_str())
-                    .bind(r["name"].as_str())
-                    .bind(centroid)
-                    .bind(r["speech_seconds"].as_f64().unwrap_or(0.0))
-                    .bind(r["role"].as_str())
-                    .bind(r["suggested"].as_str())
-                    .execute(&mut *tx)
-                    .await?;
+                sqlx::query(
+                    "INSERT INTO meeting_speakers (meeting_id, label, name, centroid, speech_seconds, role, suggested, meet_name, name_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(meeting_id)
+                .bind(r["label"].as_str())
+                .bind(r["name"].as_str())
+                .bind(centroid)
+                .bind(r["speech_seconds"].as_f64().unwrap_or(0.0))
+                .bind(r["role"].as_str())
+                .bind(r["suggested"].as_str())
+                .bind(r["meet_name"].as_str())
+                .bind(r["name_source"].as_str())
+                .execute(&mut *tx)
+                .await?;
             }
             continue;
         }

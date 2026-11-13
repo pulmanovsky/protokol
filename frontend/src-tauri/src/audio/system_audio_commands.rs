@@ -115,6 +115,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "asks the real audio devices; can hang on a Mac with virtual or Continuity devices"]
     async fn test_list_system_audio_devices() {
         let devices = list_system_audio_devices_command().await;
         match devices {

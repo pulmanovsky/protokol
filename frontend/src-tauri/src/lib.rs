@@ -62,6 +62,7 @@ pub mod calendar;
 pub mod whisper_engine;
 pub mod power;
 pub mod island;
+pub mod meet;
 pub mod settings_extra;
 
 #[cfg(test)]
@@ -427,6 +428,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(meet::plugin())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(whisper_engine::parallel_commands::ParallelProcessorState::new())
         .manage(Arc::new(RwLock::new(
@@ -537,6 +539,7 @@ pub fn run() {
             // Set models directory to use app_data_dir (unified storage location)
             audio::live_levels::init(_app.handle().clone());
             island::init(_app.handle());
+            meet::live::init(_app.handle());
             // The main window can be captured (bug screenshots) unless the user
             // chose to hide it; the saved setting is applied by the UI
             island::apply_content_protection(_app.handle(), false);
@@ -618,6 +621,26 @@ pub fn run() {
             if let tauri::WindowEvent::Focused(focused) = event {
                 if window.label() == "main" {
                     island::on_main_focus(window.app_handle(), *focused);
+                    meet::live::on_main_focus(window.app_handle());
+                } else if window.label() == island::ISLAND_LABEL {
+                    island::on_island_focus(window.app_handle(), *focused);
+                }
+            }
+            if window.label() == meet::MEET_LABEL {
+                match event {
+                    tauri::WindowEvent::Resized(_) => meet::layout(window),
+                    tauri::WindowEvent::Focused(focused) => {
+                        island::on_meet_focus(window.app_handle(), *focused);
+                        meet::live::on_meet_focus(window.app_handle());
+                    }
+                    _ => {}
+                }
+            }
+            if let tauri::WindowEvent::Destroyed = event {
+                if window.label() == meet::MEET_LABEL {
+                    let app = window.app_handle().clone();
+                    app_menu::show_meet_window_item(&app, false);
+                    tauri::async_runtime::spawn(async move { meet::live::on_closed(&app).await });
                 }
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -750,6 +773,29 @@ pub fn run() {
             power::api_is_low_power_mode,
             power::api_open_battery_settings,
             island::island_focus_main,
+            meet::meet_open,
+            meet::meet_set_theme,
+            meet::meet_start_screen,
+            meet::meet_pop_shown,
+            meet::live::meet_set_camera,
+            meet::meet_go,
+            meet::live::meet_start_recording,
+            meet::get_meet_settings,
+            meet::set_meet_setting,
+            meet::get_meet_data,
+            meet::reveal_meet_data,
+            meet::delete_meet_data,
+            meet::meet_sign_out,
+            meet::get_meet_status,
+            meet::live::meet_prompt_current,
+            meet::live::meet_prompt_answer,
+            meet::live::get_meet_live,
+            meet::live::meet_show,
+            speakers::meet_names::get_meet_accounts,
+            speakers::meet_names::set_meet_account,
+            speakers::meet_names::get_meet_link_candidates,
+            speakers::meet_names::link_meet_accounts,
+            speakers::meet_names::get_speaker_voice_matches,
             island::island_action,
             island::island_set_width,
             island::island_has_native_glass,

@@ -8,7 +8,9 @@ import { CalendarEvent, PENDING_MEETING_TITLE_KEY, formatTime } from '@/componen
 import { PermissionWarning } from '@/components/PermissionWarning';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
 import { SourcePicker } from '@/components/audio/SourcePicker';
-import { Upload } from 'lucide-react';
+import { Upload, Video } from 'lucide-react';
+import { isMeetUrl, openMeet, useMeetSettings } from '@/lib/meet';
+import { toast } from '@/lib/notice';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useImportDialog } from '@/contexts/ImportDialogContext';
 
@@ -97,6 +99,12 @@ export function TodayHome() {
     invoke('open_external_url', { url }).catch((error) => console.error('Failed to open meeting link', error));
   };
 
+  // Google Meet links open in Protokol's own Meet window (Settings → Google Meet)
+  const meetSettings = useMeetSettings();
+  const joinInApp = (url: string | null, title?: string) => {
+    openMeet(url, title).catch((error) => toast.error(`${error}`));
+  };
+
   const today = now.toLocaleDateString('uk-UA', { weekday: 'long', day: 'numeric', month: 'long' });
 
   return (
@@ -107,15 +115,26 @@ export function TodayHome() {
             <h1 data-tauri-drag-region className="text-[30px] font-bold tracking-[-0.6px] text-gray-900">Сьогодні</h1>
             <span data-tauri-drag-region className="text-sm text-[color:var(--muted-text)]">{today}</span>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
+          {/* One row beside the title; in a narrow window it wraps and stays on the right */}
+          <div className="ml-auto flex items-center justify-end gap-2 flex-wrap">
             {betaFeatures.importAndRetranscribe && (
-              <button type="button" onClick={() => openImportDialog()} className="secondary-button h-11 px-4 gap-2 text-sm font-semibold">
-                <Upload className="w-4 h-4" />
-                Імпортувати аудіо
+              // A round icon (also Файл → Імпортувати аудіо… ⌘O): the row keeps room for «Google Meet»
+              <button
+                type="button"
+                onClick={() => openImportDialog()}
+                aria-label="Імпортувати аудіо"
+                title="Імпортувати аудіо (⌘O)"
+                className="secondary-button h-11 w-11 flex-none"
+              >
+                <Upload className="w-4 h-4" aria-hidden="true" />
               </button>
             )}
+            <button type="button" onClick={() => joinInApp(null)} title="Відкрити Google Meet (⇧⌘G)" className="secondary-button h-11 px-4 gap-2 text-sm font-semibold">
+              <Video className="w-4 h-4" aria-hidden="true" />
+              Google Meet
+            </button>
             <SourcePicker />
-          <button type="button" onClick={handleRecordingToggle} className="record-button h-11 px-5 gap-2.5 text-[15px] font-semibold">
+            <button type="button" onClick={handleRecordingToggle} className="record-button h-11 px-5 gap-2.5 text-[15px] font-semibold">
               <span className="w-2.5 h-2.5 rounded-full bg-[#fff]" aria-hidden="true" />
               Почати запис
             </button>
@@ -149,11 +168,15 @@ export function TodayHome() {
               </div>
             </div>
             <div className="flex gap-2.5 flex-wrap">
-              {next.meeting_url && (
+              {next.meeting_url && isMeetUrl(next.meeting_url) && meetSettings.openInApp ? (
+                <button type="button" onClick={() => joinInApp(next.meeting_url, next.title)} className="secondary-button h-10 px-4 text-sm font-semibold">
+                  Приєднатися в Протоколі
+                </button>
+              ) : next.meeting_url ? (
                 <button type="button" onClick={() => openCall(next.meeting_url!)} className="secondary-button h-10 px-4 text-sm font-semibold">
                   Відкрити дзвінок
                 </button>
-              )}
+              ) : null}
               <button type="button" onClick={() => recordEvent(next)} className="record-button h-10 px-4 gap-2 text-sm font-semibold">
                 <span className="w-2 h-2 rounded-full bg-white" aria-hidden="true" />
                 Записати цю зустріч

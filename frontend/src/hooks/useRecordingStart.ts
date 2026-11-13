@@ -194,6 +194,9 @@ export function useRecordingStart(
       const isRuntimeError = isTranscriptionRuntimeStartError(error);
       if (errorMsg.includes('Recording start timed out')) {
         toast.error('Запис не почався — спробуйте ще раз');
+      } else if (errorMsg.includes('доступу до мікрофона')) {
+        // macOS has not allowed the microphone (devices/discovery.rs)
+        toast.error(errorMsg);
       }
 
       setStatus(RecordingStatus.ERROR, isRuntimeError

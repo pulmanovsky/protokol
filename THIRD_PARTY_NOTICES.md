@@ -108,6 +108,36 @@ SOFTWARE.
 
 - Downloaded on first run from https://huggingface.co/INSAIT-Institute . Built on Gemma 3 and subject to the Gemma Terms of Use, https://ai.google.dev/gemma/terms .
 
+## Google Meet window
+
+### Vexa
+
+- Use: the script that runs inside a Google Meet page opened in the app's own
+  window (`frontend/src-tauri/src/meet/probe.js`) finds each participant's
+  audio stream and the participant tile lit as speaking. Parts of it are
+  adapted from Vexa's `core/meetings/modules/gmeet-capture`
+  (`gmeet-capture.ts`, `gmeet-speakers.ts`, `pcm-capture.ts`).
+- Copyright 2025-2026 Vexa.ai Inc. and the Vexa contributors.
+- Source: https://github.com/Vexa-ai/vexa
+- Licence: Apache License 2.0, https://www.apache.org/licenses/LICENSE-2.0 .
+- Modifications: one shared audio context with a loudness meter per stream
+  instead of copying the audio, tile classes recorded for analysis, reports
+  handed to the app on the same Mac instead of a network connection.
+
+```
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
 ## FFmpeg
 
 The macOS app carries an `ffmpeg` program (Contents/MacOS/ffmpeg) that

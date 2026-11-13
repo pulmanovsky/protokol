@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use super::profiles::{from_blob, match_profiles, to_blob, updated_embedding, VoiceProfile};
 use super::timeline::{me_turns, overlay, ME};
-use super::{speaker_label, Turn};
+use super::{speaker_label, Diarization, Turn};
 use crate::state::AppState;
 
 pub const SEGMENTATION_MODEL: &str = "segmentation-3.0.onnx";
@@ -35,6 +35,10 @@ pub struct MeetingSpeaker {
     /// A short stretch of this voice alone, for listening (seconds)
     pub clip_start: Option<f64>,
     pub clip_end: Option<f64>,
+    /// The Google Meet participant (account) this voice came from
+    pub meet_name: Option<String>,
+    /// Where the shown name came from (see `meet_names`)
+    pub name_source: Option<String>,
 }
 
 /// How the lines of short, unlisted voices are shown
@@ -255,6 +259,69 @@ pub async fn identify_with_stop(
             }
         }
     };
+    let model = model_id(&models);
+    // Settings → Пам'ять → «Упізнавати збережені голоси» off: no saved names
+    let known_profiles = if voice_recognition_on(&pool).await { profiles(&pool, &model).await } else { Vec::new() };
+
+    // A call held in Protokol's Google Meet window: the voices are told apart
+    // by the participant lit as speaking (nothing changes without its frames)
+    let mut meet_names: Vec<Option<String>> = Vec::new();
+    let mut meet_shared: Vec<bool> = Vec::new();
+    let diarization = match (&system, crate::meet::split_on(&pool).await) {
+        (Some(call_sound), true) => {
+            let (dir, secs) = (folder.clone(), call_sound.len() as f64 / 16_000.0);
+            let frames = tokio::task::spawn_blocking(move || crate::meet::frames::for_recording(&dir, secs)).await.ok().flatten();
+            match (frames, crate::meet::frames::recording_start_ms(&folder)) {
+                (Some(call), Some(start)) => {
+                    let voice_names = match_profiles(&diarization.centroids, &known_profiles);
+                    let (sound, lv, d, emb) = (call_sound.clone(), levels.clone(), diarization.clone(), models.join(EMBEDDING_MODEL));
+                    type Split = (Diarization, Vec<Option<String>>, Vec<bool>);
+                    let done = tokio::task::spawn_blocking(move || -> Result<(super::meet::MeetStatus, Option<Split>)> {
+                        match super::meet::plan(&call, start, &sound, lv.as_ref(), &d, &voice_names) {
+                            Ok(plan) => {
+                                let mut embedder = super::embedding::Embedder::open(&emb)?;
+                                let out = super::meet::with_voices(&plan, &sound, &d, &mut |s| embedder.embed(s).ok().flatten());
+                                Ok((plan.status.clone(), Some((out, plan.meet_name.clone(), plan.shared.clone()))))
+                            }
+                            Err(status) => Ok((status, None)),
+                        }
+                    })
+                    .await;
+                    match done {
+                        Ok(Ok((status, split))) => {
+                            super::meet::save_status(&folder, &status);
+                            match split {
+                                Some((d, names, shared)) => {
+                                    meet_names = names;
+                                    meet_shared = shared;
+                                    d
+                                }
+                                None => diarization,
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            warn!("Meet: voices not split by participant: {e}");
+                            diarization
+                        }
+                        Err(e) => {
+                            warn!("Meet: voices not split by participant: {e}");
+                            diarization
+                        }
+                    }
+                }
+                _ => {
+                    let _ = std::fs::remove_file(folder.join(super::meet::STATUS_FILE));
+                    diarization
+                }
+            }
+        }
+        _ => {
+            let _ = std::fs::remove_file(folder.join(super::meet::STATUS_FILE));
+            diarization
+        }
+    };
+    let meet_name_of = |k: usize| -> Option<String> { meet_names.get(k).cloned().flatten() };
+
     // The call recording's clock drifts from the mix the player plays: what
     // is found in it is put on the mix's timeline
     let time_map = match &system {
@@ -272,10 +339,10 @@ pub async fn identify_with_stop(
     };
 
     // Labels: «Спікер N» numbered by first appearance; known voices get names
-    let model = model_id(&models);
-    // Settings → Пам'ять → «Упізнавати збережені голоси» off: no saved names
-    let known_profiles = if voice_recognition_on(&pool).await { profiles(&pool, &model).await } else { Vec::new() };
-    let known = match_profiles(&diarization.centroids, &known_profiles);
+    let mut known = match_profiles(&diarization.centroids, &known_profiles);
+    // Meet participants: a linked account names its person; a new one is
+    // offered by the name on its tile until it is confirmed
+    let (name_source, meet_suggested) = super::meet_names::resolve(&pool, &mut known, &meet_names, &meet_shared, &diarization.centroids, &known_profiles).await;
     let role_of = |k: usize| -> Option<String> {
         let name = known.get(k).cloned().flatten()?;
         let name = name.trim_end_matches('?');
@@ -290,7 +357,7 @@ pub async fn identify_with_stop(
     // Voices heard for a few seconds only (a remark from the room) are not
     // listed one by one: their lines are shown as «Репліки»
     let short: std::collections::HashSet<usize> =
-        short_voices(&order, &diarization.speech_s, &|k| known.get(k).cloned().flatten().is_some());
+        short_voices(&order, &diarization.speech_s, &|k| known.get(k).cloned().flatten().is_some() || meet_name_of(k).is_some());
     order.retain(|k| !short.contains(k));
     let label_of = |k: usize| -> String {
         if k == ME {
@@ -488,7 +555,9 @@ pub async fn identify_with_stop(
         }
     }
     let turns_for_names: Vec<super::names::TurnText> = turn_texts.iter().map(|(k, t)| super::names::TurnText { speaker: *k, text: t }).collect();
-    let suggested = super::names::suggest(&turns_for_names, &|k| k == ME || short.contains(&k) || known.get(k).cloned().flatten().is_some());
+    let mut suggested =
+        super::names::suggest(&turns_for_names, &|k| k == ME || short.contains(&k) || known.get(k).cloned().flatten().is_some() || meet_suggested.contains_key(&k));
+    suggested.extend(meet_suggested.clone());
     info!("Speaker names suggested from the transcript: {}", suggested.len());
     let shown_of = |k: usize| -> String {
         match suggested.get(&k) {
@@ -526,19 +595,24 @@ pub async fn identify_with_stop(
     for &k in &order {
         let name = known.get(k).cloned().flatten();
         let speech = diarization.speech_s.get(k).copied().unwrap_or(0.0);
-        sqlx::query("INSERT INTO meeting_speakers (meeting_id, label, name, centroid, speech_seconds, role, suggested) VALUES (?, ?, ?, ?, ?, ?, ?)")
-            .bind(meeting_id)
-            .bind(label_of(k))
-            .bind(&name)
-            .bind(to_blob(&diarization.centroids[k]))
-            .bind(speech)
-            .bind(role_of(k))
-            .bind(suggested.get(&k))
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "INSERT INTO meeting_speakers (meeting_id, label, name, centroid, speech_seconds, role, suggested, meet_name, name_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(meeting_id)
+        .bind(label_of(k))
+        .bind(&name)
+        .bind(to_blob(&diarization.centroids[k]))
+        .bind(speech)
+        .bind(role_of(k))
+        .bind(suggested.get(&k))
+        .bind(meet_name_of(k))
+        .bind(name_source.get(&k).copied())
+        .execute(&mut *tx)
+        .await?;
         speakers.push(MeetingSpeaker { label: label_of(k), name, role: role_of(k), suggested: suggested.get(&k).cloned(), speech_seconds: speech, ..Default::default() });
     }
     tx.commit().await?;
+    super::meet_names::seen(&pool, &meet_names, &meet_shared).await;
     if let Some(mut w) = one_timeline {
         w.iter_mut().for_each(|p| p.heard.clear());
         if let Err(e) = super::words::save(&folder, &w) {
@@ -629,9 +703,18 @@ pub async fn rename_with(pool: &SqlitePool, model: &str, meeting_id: &str, curre
     let label: String = row.get("label");
     let centroid = from_blob(row.get::<Vec<u8>, _>("centroid").as_slice());
     sqlx::query("UPDATE meeting_speakers SET name = ?, suggested = NULL WHERE meeting_id = ? AND label = ?").bind(name).bind(meeting_id).bind(&label).execute(&pool).await?;
+    // A Meet participant's account is this person from now on
+    super::meet_names::on_named(&pool, meeting_id, &label, name).await;
     if label == ME_LABEL || centroid.is_empty() || !voice_recognition_on(&pool).await {
         return Ok(());
     }
+    save_voice(&pool, model, name, &centroid).await
+}
+
+/// Adds one meeting's voice to a person's saved voice (a new person: their first)
+pub(crate) async fn save_voice(pool: &SqlitePool, model: &str, name: &str, centroid: &[f32]) -> Result<()> {
+    let pool = pool.clone();
+    let centroid = centroid.to_vec();
     let existing = sqlx::query("SELECT embedding, meetings FROM voice_profiles WHERE name = ? AND model = ?").bind(name).bind(model).fetch_optional(&pool).await?;
     let (embedding, meetings) = match existing {
         Some(r) => {
@@ -837,7 +920,7 @@ pub async fn speaker_models_available<R: Runtime>(app: AppHandle<R>) -> bool {
 /// A meeting's voices with what helps to tell them apart: talk time, first
 /// appearance, first lines and a clip, most talkative first
 pub async fn speakers_of(pool: &SqlitePool, meeting_id: &str) -> Result<Vec<MeetingSpeaker>> {
-    let rows = sqlx::query("SELECT label, name, role, suggested FROM meeting_speakers WHERE meeting_id = ?").bind(meeting_id).fetch_all(pool).await?;
+    let rows = sqlx::query("SELECT label, name, role, suggested, meet_name, name_source FROM meeting_speakers WHERE meeting_id = ?").bind(meeting_id).fetch_all(pool).await?;
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
         let label: String = r.get("label");
@@ -850,7 +933,7 @@ pub async fn speakers_of(pool: &SqlitePool, meeting_id: &str) -> Result<Vec<Meet
             .bind(&shown)
             .fetch_all(pool)
             .await?;
-        let mut sp = MeetingSpeaker { label, name, role, suggested, ..Default::default() };
+        let mut sp = MeetingSpeaker { label, name, role, suggested, meet_name: r.get("meet_name"), name_source: r.get("name_source"), ..Default::default() };
         let mut longest = (0.0f64, 0.0f64, 0.0f64);
         for l in &lines {
             let (a, b): (Option<f64>, Option<f64>) = (l.get("audio_start_time"), l.get("audio_end_time"));

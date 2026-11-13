@@ -348,7 +348,10 @@ pub(crate) fn merge_close_clusters(vectors: &[Vec<f32>], mut clusters: Vec<usize
     clusters
 }
 
-/// Absorbs very short turns into the neighbour and joins same-speaker turns
+/// Absorbs very short turns into a neighbour that touches them and joins
+/// same-speaker turns. A short turn with silence on both sides stays as it
+/// is: stretching a neighbour over the silence would give that speaker
+/// everything in between (a cough at 95 s once made «Я» last from 8 s to 373 s).
 pub(crate) fn smooth_turns(mut turns: Vec<Turn>) -> Vec<Turn> {
     let mut changed = true;
     while changed {
@@ -357,12 +360,17 @@ pub(crate) fn smooth_turns(mut turns: Vec<Turn>) -> Vec<Turn> {
         while i < turns.len() {
             if turns[i].end - turns[i].start < MIN_TURN_S && turns.len() > 1 {
                 // Give it to the longer neighbour that touches it
-                let prev_len = if i > 0 { turns[i - 1].end - turns[i - 1].start } else { -1.0 };
-                let next_len = if i + 1 < turns.len() { turns[i + 1].end - turns[i + 1].start } else { -1.0 };
-                if prev_len >= next_len && i > 0 {
-                    turns[i - 1].end = turns[i].end;
-                } else if i + 1 < turns.len() {
-                    turns[i + 1].start = turns[i].start;
+                let touches_prev = i > 0 && turns[i].start - turns[i - 1].end <= MIN_GAP_S;
+                let touches_next = i + 1 < turns.len() && turns[i + 1].start - turns[i].end <= MIN_GAP_S;
+                let prev_len = if touches_prev { turns[i - 1].end - turns[i - 1].start } else { -1.0 };
+                let next_len = if touches_next { turns[i + 1].end - turns[i + 1].start } else { -1.0 };
+                if touches_prev && prev_len >= next_len {
+                    turns[i - 1].end = turns[i - 1].end.max(turns[i].end);
+                } else if touches_next {
+                    turns[i + 1].start = turns[i + 1].start.min(turns[i].start);
+                } else {
+                    i += 1;
+                    continue;
                 }
                 turns.remove(i);
                 changed = true;
@@ -401,5 +409,12 @@ mod tests {
         let t = |s: f64, e: f64, k: usize| Turn { start: s, end: e, speaker: k };
         let turns = vec![t(0.0, 5.0, 0), t(5.0, 5.2, 1), t(5.2, 9.0, 0), t(9.5, 12.0, 1)];
         assert_eq!(smooth_turns(turns), vec![t(0.0, 9.0, 0), t(9.5, 12.0, 1)]);
+    }
+
+    #[test]
+    fn a_short_turn_alone_does_not_stretch_a_far_neighbour() {
+        let t = |s: f64, e: f64, k: usize| Turn { start: s, end: e, speaker: k };
+        let turns = vec![t(8.0, 9.0, 0), t(95.0, 95.2, 0), t(200.0, 200.3, 0)];
+        assert_eq!(smooth_turns(turns.clone()), turns);
     }
 }

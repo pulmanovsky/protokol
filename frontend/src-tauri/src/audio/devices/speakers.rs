@@ -80,8 +80,9 @@ pub fn find_builtin_output_device() -> Result<Option<AudioDevice>> {
     ];
 
     // Search all output devices for built-in pattern matches
-    for device in host.output_devices()? {
-        if let Ok(name) = device.name() {
+    // Names only: opening every device can block on a stuck virtual driver
+    for name in super::lookup::device_names(&host, false) {
+        {
             let name_lower = name.to_lowercase();
 
             // Check if this is a built-in device

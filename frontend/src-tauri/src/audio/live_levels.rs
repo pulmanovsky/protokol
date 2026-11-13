@@ -188,10 +188,7 @@ pub fn start_mic_preview(device_name: Option<String>) -> Result<(), String> {
                 .map(|n| n.trim_end_matches("(input)").trim().to_string())
                 .filter(|n| !n.is_empty());
             let device = match &wanted {
-                Some(name) => host
-                    .input_devices()
-                    .ok()
-                    .and_then(|mut it| it.find(|d| d.name().map(|n| &n == name).unwrap_or(false)))
+                Some(name) => crate::audio::devices::lookup::device_by_name(&host, name, true)
                     .or_else(|| host.default_input_device()),
                 None => host.default_input_device(),
             };

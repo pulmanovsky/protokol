@@ -22,7 +22,14 @@ fn main() {
     onnxruntime::ensure_onnxruntime_runtime();
     copy_licences();
 
-    tauri_build::build()
+    // The Meet window's only commands (the 2 s report and the microphone
+    // state), as an inlined plugin: a capability can then allow just these to
+    // https://meet.google.com (see src/meet)
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .plugin("meetprobe", tauri_build::InlinedPlugin::new().commands(&["push", "mic"])),
+    )
+    .expect("failed to run tauri-build")
 }
 
 /// The licence texts go inside the app (Resources/licenses), next to

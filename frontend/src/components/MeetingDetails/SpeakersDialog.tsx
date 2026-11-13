@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, Loader2, Pause, Play, Search, Users, X } from 'lucide-react';
 import { copySpeakerText } from '@/lib/copySpeaker';
 import type { SpokenLine } from '@/lib/speakerText';
@@ -11,6 +11,8 @@ import { toast } from '@/lib/notice';
 import { speakerColorMap } from '@/lib/speakerColors';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog';
 import { SavedSpeakers, SpeakersFooter, SPEAKERS_BODY } from '../SavedSpeakers';
+import { MeetLinkSheet, MeetNotices, MeetSpeakerCard, meetTag, sourceTag } from './MeetSpeakers';
+import type { LinkCandidate, MeetAccount, MeetStatus, NameSource } from '@/lib/meet';
 
 interface MeetingSpeaker {
   label: string;
@@ -23,6 +25,10 @@ interface MeetingSpeaker {
   samples: string[];
   clip_start: number | null;
   clip_end: number | null;
+  /** The Google Meet account this voice came from */
+  meet_name: string | null;
+  /** Where the shown name came from */
+  name_source: NameSource | null;
 }
 
 interface SpeakersDialogProps {
@@ -134,6 +140,12 @@ export function SpeakersDialog({ open, onOpenChange, meetingId, onChanged, onJum
   const [others, setOthers] = useState<OtherVoice[]>([]);
   const [saved, setSaved] = useState<SavedPerson[]>([]);
   const [query, setQuery] = useState('');
+  // Google Meet: what the window gave this recording, accounts not linked yet, all accounts
+  const [meetStatus, setMeetStatus] = useState<MeetStatus | null>(null);
+  const [candidates, setCandidates] = useState<LinkCandidate[]>([]);
+  const [accounts, setAccounts] = useState<MeetAccount[]>([]);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const nameRef = useRef<HTMLInputElement | null>(null);
 
   const shown = (s: MeetingSpeaker) => s.name ?? (s.suggested ? `${s.suggested} (?)` : s.label);
   const colors = useMemo(() => speakerColorMap(speakers.map((s) => s.name ?? s.label)), [speakers]);
@@ -154,6 +166,14 @@ export function SpeakersDialog({ open, onOpenChange, meetingId, onChanged, onJum
     setOthers(await invoke<OtherVoice[]>('get_other_voices', { meetingId }).catch(() => []));
     const people = await invoke<{ people: SavedPerson[] }>('get_saved_speakers').catch(() => ({ people: [] }));
     setSaved(people.people);
+    setMeetStatus(await invoke<MeetStatus | null>('get_meet_status', { meetingId }).catch(() => null));
+    if (list.some((s) => s.meet_name)) {
+      setCandidates(await invoke<LinkCandidate[]>('get_meet_link_candidates', { meetingId }).catch(() => []));
+      setAccounts(await invoke<MeetAccount[]>('get_meet_accounts').catch(() => []));
+    } else {
+      setCandidates([]);
+      setAccounts([]);
+    }
   }, [meetingId]);
 
   const changed = async () => {
@@ -337,6 +357,7 @@ export function SpeakersDialog({ open, onOpenChange, meetingId, onChanged, onJum
               {unnamed > 0 ? ` · ${unnamed} без імені` : ''}
             </div>
           </div>
+          <MeetNotices meetingId={meetingId} status={meetStatus} candidates={candidates} onLink={() => setLinkOpen(true)} />
           {hint && (
             <div key={hint.key} className="mx-3 mb-2 flex items-center gap-2 rounded-lg bg-[var(--blue-tint)] px-2.5 py-2 text-xs">
               <span className="min-w-0 flex-1">{hint.text}</span>
@@ -361,9 +382,11 @@ export function SpeakersDialog({ open, onOpenChange, meetingId, onChanged, onJum
                   <span className="flex min-w-0 flex-col">
                     <span className={`truncate text-sm font-medium ${s.name ? '' : 'text-[color:var(--muted-text)]'}`}>{s.name ?? (s.suggested ? `${s.suggested}?` : s.label)}</span>
                     <span className="truncate text-xs text-[color:var(--muted-text)]">
-                      {!s.name && s.suggested ? `можливо, ${s.suggested} · ` : !s.name ? 'без імені · ' : ''}
+                      {!s.name && s.suggested && !sourceTag(s) ? `можливо, ${s.suggested} · ` : !s.name && !s.suggested ? 'без імені · ' : ''}
                       мовлення {duration(s.speech_seconds)}
-                      {s.first_seconds != null && s.name ? ` · вперше ${mmss(s.first_seconds)}` : ''}
+                      {sourceTag(s) ? ` · ${sourceTag(s)}` : ''}
+                      {meetTag(s) ? ` · ${meetTag(s)}` : ''}
+                      {s.first_seconds != null && s.name && !s.meet_name ? ` · вперше ${mmss(s.first_seconds)}` : ''}
                     </span>
                   </span>
                 </button>
@@ -394,6 +417,7 @@ export function SpeakersDialog({ open, onOpenChange, meetingId, onChanged, onJum
               </span>
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <input
+                  ref={nameRef}
                   aria-label="Ім'я"
                   placeholder={`${speaker.label}: впишіть ім'я`}
                   value={nameDraft}
@@ -415,10 +439,34 @@ export function SpeakersDialog({ open, onOpenChange, meetingId, onChanged, onJum
                   onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
                   className="min-w-0 bg-transparent text-sm text-[color:var(--muted-text)] outline-none placeholder:text-[color:var(--muted-text)]"
                 />
+                {speaker.meet_name && (
+                  <span className="truncate text-xs text-[color:var(--muted-text)]">
+                    Обліковий запис Google Meet: {speaker.meet_name} · {duration(speaker.speech_seconds)}
+                    {speaker.first_seconds != null ? ` · уперше о ${mmss(speaker.first_seconds)}` : ''}
+                  </span>
+                )}
               </div>
             </div>
 
-            {!speaker.name && speaker.suggested && (
+            {speaker.label !== 'Я' && (
+            <MeetSpeakerCard
+              meetingId={meetingId}
+              speaker={speaker}
+              people={saved}
+              taken={speakers.filter((s) => s.label !== speaker.label && s.name).map((s) => s.name!)}
+              account={accounts.find((a) => a.meetName === speaker.meet_name) ?? null}
+              playing={playing === speaker.label}
+              onPlayClip={() => playClip(speaker)}
+              onRename={(name) => act(() => invoke('rename_speaker', { meetingId, current: shown(speaker), name }))}
+              onNewPerson={() => {
+                setNameDraft('');
+                window.setTimeout(() => nameRef.current?.focus(), 0);
+              }}
+              onChanged={changed}
+            />
+            )}
+
+            {!speaker.name && speaker.suggested && !(speaker.name_source && speaker.name_source !== 'voice') && (
               <div className="flex items-center gap-2 rounded-xl bg-[var(--blue-tint)] px-3.5 py-2.5 text-sm">
                 <span className="min-w-0 flex-1">
                   Можливо, це <b>{speaker.suggested}</b>: так звучало в записі.
@@ -545,6 +593,20 @@ export function SpeakersDialog({ open, onOpenChange, meetingId, onChanged, onJum
         ) : (
           <>
             {hereBody()}
+            <MeetLinkSheet
+              open={linkOpen}
+              onOpenChange={setLinkOpen}
+              meetingId={meetingId}
+              candidates={candidates}
+              people={saved}
+              speakers={speakers}
+              playingLabel={playing}
+              onPlay={(label) => {
+                const s = speakers.find((x) => x.label === label);
+                if (s) playClip(s);
+              }}
+              onLinked={changed}
+            />
             <SpeakersFooter onDone={close}>
               <button type="button" className={btn} onClick={identify} disabled={running || !available}>
                 {speakers.length === 0 ? 'Розпізнати спікерів' : 'Розпізнати заново'}

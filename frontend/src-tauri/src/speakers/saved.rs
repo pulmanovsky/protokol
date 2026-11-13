@@ -345,6 +345,8 @@ pub async fn merge(pool: &SqlitePool, keep: &str, merge: &str) -> Result<()> {
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    // Google Meet accounts of `merge` are `keep`'s
+    super::meet_names::person_renamed(pool, merge, keep).await;
     Ok(())
 }
 
@@ -385,6 +387,7 @@ pub async fn forget(pool: &SqlitePool, names: &[String]) -> Result<String> {
         .await?;
     }
     tx.commit().await?;
+    super::meet_names::people_forgotten(pool, names).await;
     Ok(batch)
 }
 

@@ -2,7 +2,9 @@
 
 import { ReactNode, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Lock } from 'lucide-react';
+import { Lock, Video } from 'lucide-react';
+import { openMeet, participantsText, useMeetLive } from '@/lib/meet';
+import { toast } from '@/lib/notice';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
@@ -76,6 +78,7 @@ export function RecordingView({ controls, isProcessingStop, isStopping }: Record
   );
 
   const live = isRecording && !isPaused;
+  const meet = useMeetLive();
   const [audioSources] = useAudioSources();
   const [micMuted, setMicMuted] = useMicMute();
   const levels = useLiveAudioLevels(isRecording);
@@ -142,6 +145,37 @@ export function RecordingView({ controls, isProcessingStop, isStopping }: Record
           <div className="flex items-baseline justify-between gap-3 px-7 pt-6 pb-2">
             <h2 className="text-[17px] font-bold text-gray-900">Стенограма наживо</h2>
             <span className="text-[13px] text-[color:var(--muted-text)]">дослівно, як сказано</span>
+          </div>
+          {/* Protokol's Google Meet window: who it sees speaking, or a way to open it
+              during the recording */}
+          <div className="mx-7 mt-1 mb-1 flex items-center gap-2.5 rounded-[10px] bg-[var(--system-fill)] px-3 py-2 min-w-0">
+            <Video className="w-[18px] h-[18px] flex-none text-gray-900" aria-hidden="true" />
+            <span className="flex-1 min-w-0 truncate text-[13px] text-gray-900">
+              Google Meet
+              {!meet.open ? (
+                ' · вікно закрито'
+              ) : meet.inCall ? (
+                <>
+                  {` · ${participantsText(meet.participants)}`}
+                  {meet.meetMic === true && ' · мікрофон у Meet вимкнено'}
+                  {meet.speaking.length > 0 && (
+                    <>
+                      {' · говорить: '}
+                      <b>{meet.speaking.join(', ')}</b>
+                    </>
+                  )}
+                </>
+              ) : (
+                ' · чекає на нараду'
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={() => (meet.open ? invoke('meet_show') : openMeet()).catch((e) => toast.error(`${e}`))}
+              className="secondary-button h-7 px-3 text-[12.5px] font-semibold flex-none"
+            >
+              {meet.open ? 'Показати нараду' : 'Відкрити Google Meet'}
+            </button>
           </div>
           <div className="flex-1 min-h-0 px-3 pb-3">
             <VirtualizedTranscriptView

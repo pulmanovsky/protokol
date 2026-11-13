@@ -193,10 +193,7 @@ fn resolve_mic_or_default<R: Runtime>(
     if let Some(name) = requested_name {
         match parse_audio_device(name) {
             Ok(device) => {
-                let exists = cpal::default_host()
-                    .input_devices()
-                    .map(|mut it| it.any(|d| d.name().map(|n| n == device.name).unwrap_or(false)))
-                    .unwrap_or(false);
+                let exists = super::devices::lookup::device_by_name(&cpal::default_host(), &device.name, true).is_some();
                 if exists {
                     info!("✅ Using requested microphone: '{}'", device.name);
                     return Some(Arc::new(device));
@@ -294,7 +291,7 @@ async fn prepare_audio_for_recording(
 
     if let Err(e) = super::devices::verify_microphone_access().await {
         error!("Microphone access verification failed: {}", e);
-        return Err(format!("Microphone access required: {}", e));
+        return Err(e.to_string());
     }
     Ok(())
 }
@@ -388,8 +385,9 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     if microphone_device.is_none() && system_device.is_none() {
         return Err("Увімкніть хоча б одне джерело звуку: мікрофон або звук дзвінка".to_string());
     }
-    // Every recording starts unmuted; the preview stream is not needed any more
-    super::live_levels::set_mic_muted(false);
+    // Every recording starts unmuted, unless the microphone is off in the
+    // Google Meet window; the preview stream is not needed any more
+    super::live_levels::set_mic_muted(crate::meet::live::mic_muted_at_start());
     super::live_levels::set_call_muted(false);
     super::live_levels::stop_mic_preview();
 
@@ -572,7 +570,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     if mic_device.is_none() && system_device.is_none() {
         return Err("Увімкніть хоча б одне джерело звуку: мікрофон або звук дзвінка".to_string());
     }
-    super::live_levels::set_mic_muted(false);
+    super::live_levels::set_mic_muted(crate::meet::live::mic_muted_at_start());
     super::live_levels::set_call_muted(false);
     super::live_levels::stop_mic_preview();
 
@@ -1117,6 +1115,18 @@ pub async fn stop_recording<R: Runtime>(
     Ok(())
 }
 
+/// The current recording at a glance, for the Google Meet window: paused,
+/// seconds recorded (pauses left out) and the meeting's name. None when no
+/// recording runs.
+pub fn recording_glance() -> Option<(bool, f64, Option<String>)> {
+    if !IS_RECORDING.load(Ordering::SeqCst) {
+        return None;
+    }
+    let guard = RECORDING_MANAGER.lock().ok()?;
+    let manager = guard.as_ref()?;
+    Some((manager.is_paused(), manager.get_active_recording_duration().unwrap_or(0.0), manager.get_meeting_name()))
+}
+
 /// Check if recording is active
 pub async fn is_recording() -> bool {
     IS_RECORDING.load(Ordering::SeqCst)
@@ -1214,11 +1224,14 @@ pub async fn is_recording_paused() -> bool {
 #[tauri::command]
 pub async fn get_recording_state() -> serde_json::Value {
     let is_recording = IS_RECORDING.load(Ordering::SeqCst);
+    // The stop has begun and the recording is being finished (a few seconds)
+    let is_stopping = IS_RECORDING_STOPPING.load(Ordering::SeqCst);
     let manager_guard = RECORDING_MANAGER.lock().unwrap();
 
     if let Some(manager) = manager_guard.as_ref() {
         serde_json::json!({
             "is_recording": is_recording,
+            "is_stopping": is_stopping,
             "is_paused": manager.is_paused(),
             "is_active": manager.is_active(),
             "recording_duration": manager.get_recording_duration(),
@@ -1229,6 +1242,7 @@ pub async fn get_recording_state() -> serde_json::Value {
     } else {
         serde_json::json!({
             "is_recording": is_recording,
+            "is_stopping": is_stopping,
             "is_paused": false,
             "is_active": false,
             "recording_duration": null,
@@ -1730,9 +1744,17 @@ fn current_recording_seconds() -> Option<f64> {
 }
 
 /// Mutes or unmutes the microphone inside the app (the device stays open).
-/// The window shows the state; the transcript stays text only.
+/// The window shows the state; the transcript stays text only. With the
+/// Google Meet window open, Meet's own microphone button is pressed to match.
 #[tauri::command]
 pub async fn set_mic_muted<R: Runtime>(app: AppHandle<R>, muted: bool) -> Result<bool, String> {
+    crate::meet::live::press_meet_mic(&app, muted);
+    apply_mic_muted(&app, muted);
+    Ok(muted)
+}
+
+/// The mute itself, without pressing Meet's button (Meet's button changed)
+pub fn apply_mic_muted<R: Runtime>(app: &AppHandle<R>, muted: bool) {
     let was_muted = super::live_levels::set_mic_muted(muted);
     if was_muted != muted {
         info!("🎙️ Microphone {}", if muted { "muted" } else { "unmuted" });
@@ -1741,7 +1763,6 @@ pub async fn set_mic_muted<R: Runtime>(app: AppHandle<R>, muted: bool) -> Result
         let at = current_recording_seconds();
         let _ = app.emit("mic-mute-changed", serde_json::json!({ "muted": muted, "at": at }));
     }
-    Ok(muted)
 }
 
 #[tauri::command]

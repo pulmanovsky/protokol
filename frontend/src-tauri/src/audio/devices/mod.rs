@@ -6,6 +6,7 @@ pub mod microphone;
 pub mod speakers;
 pub mod configuration;
 pub mod platform;
+pub mod lookup;
 
 // Re-export all public functions to preserve existing API
 pub use discovery::{list_audio_devices, trigger_audio_permission, verify_microphone_access};

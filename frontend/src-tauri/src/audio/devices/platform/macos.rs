@@ -8,10 +8,9 @@ pub fn configure_macos_audio(host: &cpal::Host) -> Result<Vec<AudioDevice>> {
     let mut devices: Vec<AudioDevice> = Vec::new();
 
     // Existing macOS implementation
-    for device in host.input_devices()? {
-        if let Ok(name) = device.name() {
-            devices.push(AudioDevice::new(name, DeviceType::Input));
-        }
+    // Each device checked with a time limit (devices/lookup.rs)
+    for name in crate::audio::devices::lookup::device_names(host, true) {
+        devices.push(AudioDevice::new(name, DeviceType::Input));
     }
 
     // Filter function to exclude macOS built-in speakers for output devices
@@ -23,11 +22,9 @@ pub fn configure_macos_audio(host: &cpal::Host) -> Result<Vec<AudioDevice>> {
 
     // Use default host for all macOS output devices
     // Core Audio backend uses direct cidre API for system capture, not cpal
-    for device in host.output_devices()? {
-        if let Ok(name) = device.name() {
-            if should_include_output_device(&name) {
-                devices.push(AudioDevice::new(name, DeviceType::Output));
-            }
+    for name in crate::audio::devices::lookup::device_names(host, false) {
+        if should_include_output_device(&name) {
+            devices.push(AudioDevice::new(name, DeviceType::Output));
         }
     }
 

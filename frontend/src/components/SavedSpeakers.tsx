@@ -8,6 +8,7 @@ import { confirmNative } from '@/lib/confirm';
 import { plural } from '@/lib/plural';
 import { speakerColorMap } from '@/lib/speakerColors';
 import { Switch } from '@/components/ui/switch';
+import { PersonMeetAccounts } from '@/components/MeetAccounts';
 
 interface SavedSpeaker {
   name: string;
@@ -459,6 +460,8 @@ export function SavedSpeakers({ onChanged, onDone, focus }: { onChanged?: () => 
               {person.hasVoice && <span className="px-1 text-xs text-[color:var(--muted-text)]">«Не цей голос» прибирає запис із голосу людини, решта записів залишається.</span>}
             </section>
           )}
+
+          <PersonMeetAccounts person={person.name} />
 
           <div className="overflow-hidden rounded-xl bg-[var(--card-bg)] shadow-[inset_0_0_0_0.5px_var(--hairline)]">
             <label className="flex items-center gap-3 border-b border-[var(--hairline)] px-3.5 py-2.5">

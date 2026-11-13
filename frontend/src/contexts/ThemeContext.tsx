@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -63,6 +64,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     getCurrentWindow()
       .setTheme(mode === 'system' ? null : mode)
       .catch((error) => console.warn('[Theme] Failed to set native window theme:', error));
+    // The Google Meet window's frame follows the app too
+    invoke('meet_set_theme', { theme: mode === 'system' ? null : mode }).catch(() => {});
   }, [mode]);
 
   const setMode = useCallback((next: ThemeMode) => {

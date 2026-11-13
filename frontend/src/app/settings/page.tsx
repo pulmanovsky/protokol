@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, Suspense } from 'react';
-import { Settings2, Bell, Brain, HardDrive, Shield, Mic, AudioLines, FileText, CalendarDays, Palette, Info as InfoIcon } from 'lucide-react';
+import { Settings2, Bell, Brain, HardDrive, Shield, Mic, AudioLines, FileText, CalendarDays, Palette, Video, Info as InfoIcon } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useSearchParams } from 'next/navigation';
 import { TranscriptSettings } from '@/components/TranscriptSettings';
@@ -10,6 +10,7 @@ import { GeneralSettings } from '@/components/settings/GeneralSettings';
 import { StorageSettings } from '@/components/settings/StorageSettings';
 import { MemorySettings } from '@/components/settings/MemorySettings';
 import { PrivacySettings } from '@/components/settings/PrivacySettings';
+import { MeetSettings } from '@/components/settings/MeetSettings';
 import { SummaryModelSettings } from '@/components/SummaryModelSettings';
 import { ClickWordRow, WordHighlightRow } from '@/components/PreferenceSettings';
 import { SettingsGroup } from '@/components/settings/SettingsGroup';
@@ -25,6 +26,7 @@ const SECTIONS = [
   { value: 'general', label: 'Загальні', icon: Settings2 },
   { value: 'notifications', label: 'Сповіщення', icon: Bell },
   { value: 'recording', label: 'Запис', icon: Mic },
+  { value: 'meet', label: 'Google Meet', icon: Video },
   { value: 'transcription', label: 'Стенограма', icon: AudioLines },
   { value: 'memory', label: "Пам'ять", icon: Brain },
   { value: 'document', label: 'Документ', icon: FileText },
@@ -131,6 +133,7 @@ function SettingsContent() {
             {active === 'general' && <GeneralSettings />}
             {active === 'notifications' && <NotificationsSettings />}
             {active === 'recording' && <RecordingSettings />}
+            {active === 'meet' && <MeetSettings />}
             {active === 'transcription' && (
               <>
                 <TranscriptSettings

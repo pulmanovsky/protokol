@@ -4,7 +4,8 @@ import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Shield } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
-import { SettingsGroup, SettingsRow } from '@/components/settings/SettingsGroup';
+import { useRouter } from 'next/navigation';
+import { SettingsGroup, SettingsLinkRow, SettingsRow } from '@/components/settings/SettingsGroup';
 import { confirmNative } from '@/lib/confirm';
 import { plural } from '@/lib/plural';
 import { toast } from '@/lib/notice';
@@ -21,6 +22,7 @@ function Label({ title, sub }: { title: string; sub: string }) {
 
 /** Settings → Конфіденційність: what stays on this Mac and how to remove it */
 export function PrivacySettings() {
+  const router = useRouter();
   const [hide, setHide] = useState<boolean | null>(null);
   const [logSize, setLogSize] = useState<number | null>(null);
   const [voices, setVoices] = useState<number | null>(null);
@@ -95,13 +97,21 @@ export function PrivacySettings() {
           </span>
           <Label
             title="Усе обробляється на цьому Mac"
-            sub="Звук, стенограми, документи і голоси нікуди не надсилаються. В інтернет програма звертається лише по оновлення, моделі та календар за вашим посиланням, а звернення відкриваєте ви самі."
+            sub="Звук, стенограми, документи і голоси нікуди не надсилаються. В інтернет програма звертається лише по оновлення, моделі та календар за вашим посиланням, а звернення відкриваєте ви самі. Нарада Google Meet працює через Google, як у браузері."
           />
         </div>
       </div>
 
+      <SettingsGroup title="Google Meet">
+        <SettingsLinkRow
+          label="Вхід у Google, дані нарад і що бачить Протокол у вікні Meet"
+          sub="Усе це в окремому розділі «Google Meet»"
+          onClick={() => router.push('/settings?section=meet')}
+        />
+      </SettingsGroup>
+
       <SettingsGroup title="Показ екрана">
-        <SettingsRow label={<Label title="Приховувати головне вікно під час показу екрана" sub="Учасники дзвінка не бачать стенограму і список записів" />}>
+        <SettingsRow label={<Label title="Приховувати головне вікно під час показу екрана" sub="Учасники дзвінка не бачать стенограму і список записів. Вікно Google Meet лишається видимим: його показуєте ви самі" />}>
           <Switch checked={!!hide} disabled={hide === null} onCheckedChange={(v) => void changeHide(v)} aria-label="Приховувати головне вікно під час показу екрана" />
         </SettingsRow>
         <SettingsRow label={<Label title="Панель запису" sub="Під час показу екрана її не видно іншим" />}>
@@ -114,7 +124,7 @@ export function PrivacySettings() {
         help="Журнал не надсилається сам. Його рядки можна додати до звернення у «Повідомити про проблему», перед цим видно весь текст."
       >
         <SettingsRow
-          label={<Label title="Журнал помилок" sub={`Технічні записи без текстів і назв записів${logSize != null ? ` · ${formatBytes(logSize)}` : ''}. Потрібен, щоб описати проблему`} />}
+          label={<Label title="Журнал помилок" sub={`Технічні записи без текстів, назв записів і імен учасників Meet${logSize != null ? ` · ${formatBytes(logSize)}` : ''}. Потрібен, щоб описати проблему`} />}
         >
           <span className="flex gap-2">
             <button type="button" className="settings-button" onClick={() => void invoke('api_log_reveal').catch((e) => toast.error(`${e}`))}>

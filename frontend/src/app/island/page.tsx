@@ -6,6 +6,9 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow, currentMonitor } from '@tauri-apps/api/window';
 import { LogicalPosition } from '@tauri-apps/api/dpi';
 import { meterPercent, readStoredSources, SILENCE_RMS, useMicMute, useCallMute } from '@/lib/audioSources';
+import { BAR_WEIGHTS, Bars, CallIcon, Chevron, DoneIcon, formatClock, MicIcon, PauseIcon, PlayIcon, Ring, StopIcon, WarnIcon, XIcon } from '@/components/capsule/parts';
+import { answerPrompt } from '@/components/MeetPrompt';
+import { useMeetLive, type MeetPrompt } from '@/lib/meet';
 
 const HEIGHT = 44;
 const EDGE_MARGIN = 16;
@@ -17,7 +20,6 @@ const MISSING_AFTER_MS = 10_000;
 const READY_FOR_MS = 10_000;
 /** No speaker recognition after this long: the transcript is ready as it is */
 const NO_SPEAKERS_AFTER_MS = 30_000;
-const BAR_WEIGHTS = [0.55, 0.85, 1, 0.75, 0.5];
 
 type Side = 'left' | 'right';
 type Phase = 'recording' | 'processing' | 'ready';
@@ -33,14 +35,6 @@ interface Levels {
   system_rms: number;
   mic_active: boolean;
   system_active: boolean;
-}
-
-function formatClock(totalSeconds: number): string {
-  const s = Math.max(0, Math.floor(totalSeconds));
-  const h = Math.floor(s / 3600);
-  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
-  const ss = String(s % 60).padStart(2, '0');
-  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
 function readJson<T>(key: string): T | null {
@@ -100,109 +94,6 @@ async function restorePosition(width: number) {
 }
 
 // ---------------------------------------------------------------------------
-// Icons (16 px, stroke follows the text colour)
-// ---------------------------------------------------------------------------
-
-const stroke = {
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 1.5,
-  strokeLinecap: 'round' as const,
-  strokeLinejoin: 'round' as const,
-};
-
-function MicIcon({ off = false, size = 16 }: { off?: boolean; size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" {...stroke} aria-hidden="true">
-      <rect x="5.5" y="1.5" width="5" height="8.5" rx="2.5" />
-      <path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2" />
-      {off && <path d="M2.5 2.5l11 11" />}
-    </svg>
-  );
-}
-
-function CallIcon({ off = false, size = 16 }: { off?: boolean; size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" {...stroke} aria-hidden="true">
-      <path d="M2 6h2.5L8 3v10L4.5 10H2z" />
-      {off ? <path d="M11 6l3.5 4M14.5 6L11 10" /> : <path d="M10.5 5.5a3.5 3.5 0 0 1 0 5M12.5 3.5a6.5 6.5 0 0 1 0 9" />}
-    </svg>
-  );
-}
-
-function WarnIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" {...stroke} aria-hidden="true">
-      <path d="M8 2.2l6.2 11H1.8z" />
-      <path d="M8 6.5v3M8 11.6v.01" />
-    </svg>
-  );
-}
-
-function PauseIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-      <rect x="3" y="2.5" width="2.6" height="9" rx="1" fill="currentColor" />
-      <rect x="8.4" y="2.5" width="2.6" height="9" rx="1" fill="currentColor" />
-    </svg>
-  );
-}
-
-function PlayIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-      <path d="M4 2.4v9.2l7.4-4.6z" fill="currentColor" />
-    </svg>
-  );
-}
-
-function StopIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-      <rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="currentColor" />
-    </svg>
-  );
-}
-
-function Chevron({ towards }: { towards: 'right' | 'left' }) {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" {...stroke} strokeWidth={1.6} aria-hidden="true">
-      <path d={towards === 'right' ? 'M4.5 2.5L8 6l-3.5 3.5' : 'M7.5 2.5L4 6l3.5 3.5'} />
-    </svg>
-  );
-}
-
-function Ring() {
-  return (
-    <svg className="isl-ring" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-      <circle cx="9" cy="9" r="7" fill="none" stroke="var(--isl-sep)" strokeWidth="2.4" />
-      <path d="M9 2a7 7 0 0 1 6.6 4.7" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function DoneIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-      <circle cx="9" cy="9" r="8" fill="currentColor" />
-      <path d="M5.2 9.3l2.4 2.4 5-5" fill="none" stroke="var(--isl-done-check)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-/** Five level bars; the weights rotate with each update so speech looks alive */
-function Bars({ percent, shift }: { percent: number; shift: number }) {
-  return (
-    <span className={`isl-bars ${percent <= 0 ? 'isl-bars-quiet' : ''}`} aria-hidden="true">
-      {BAR_WEIGHTS.map((_, i) => {
-        const weight = BAR_WEIGHTS[(i + shift) % BAR_WEIGHTS.length];
-        return <i key={i} style={{ height: `${3 + Math.round((13 * percent * weight) / 100)}px` }} />;
-      })}
-    </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
 
 export default function IslandPage() {
   const [phase, setPhase] = useState<Phase>('recording');
@@ -218,11 +109,18 @@ export default function IslandPage() {
   const [sources] = useState(readStoredSources);
   const [muted, setMuted] = useMicMute();
   const [callMuted, setCallMuted] = useCallMute();
+  // A Google Meet offer while neither Protokol window is in front (meet/live.rs)
+  const [prompt, setPrompt] = useState<MeetPrompt | null>(null);
 
   const capsuleRef = useRef<HTMLDivElement>(null);
   const widthRef = useRef(0);
   const placedRef = useRef(false);
   const lastSeenRef = useRef({ mic: Date.now(), system: Date.now() });
+  // macOS sends no call sound while no app plays any, so silence on the call
+  // channel means something only during a Google Meet call with others in
+  // Protokol's window, where Meet keeps playing
+  const meet = useMeetLive();
+  const callExpected = meet.open && meet.inCall && meet.participants >= 2;
   const speakersStartRef = useRef<number | null>(null);
   const meetingRef = useRef<string | null>(null);
 
@@ -235,6 +133,16 @@ export default function IslandPage() {
     invoke<boolean>('island_has_native_glass')
       .then((has) => setNativeGlass(has === true))
       .catch(() => setNativeGlass(false));
+  }, []);
+
+  useEffect(() => {
+    invoke<MeetPrompt | null>('meet_prompt_current')
+      .then((p) => setPrompt(p ?? null))
+      .catch(() => {});
+    const un = listen<MeetPrompt | null>('meet-prompt', (e) => setPrompt(e.payload ?? null));
+    return () => {
+      un.then((f) => f());
+    };
   }, []);
 
   // The window always matches the capsule, anchored to its screen edge
@@ -258,7 +166,7 @@ export default function IslandPage() {
     const observer = new ResizeObserver(fit);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [phase, collapsed, side]);
+  }, [phase, collapsed, side, prompt?.kind]);
 
   // Recording time from the backend, ticking locally in between
   useEffect(() => {
@@ -330,14 +238,20 @@ export default function IslandPage() {
     };
   }, []);
 
-  // A source that has sent nothing for 10 s is shown as missing
+  // A source that has sent nothing for 10 s is shown as missing (the call:
+  // only while a Meet call with others should be heard)
+  const callExpectedRef = useRef(callExpected);
+  useEffect(() => {
+    if (callExpected && !callExpectedRef.current) lastSeenRef.current.system = Date.now();
+    callExpectedRef.current = callExpected;
+  }, [callExpected]);
   useEffect(() => {
     if (phase !== 'recording') return;
     const check = setInterval(() => {
       const now = Date.now();
       const running = !state.is_paused;
       const mic = running && sources.micEnabled && !muted && now - lastSeenRef.current.mic > MISSING_AFTER_MS;
-      const system = running && sources.systemEnabled && !callMuted && now - lastSeenRef.current.system > MISSING_AFTER_MS;
+      const system = running && sources.systemEnabled && !callMuted && callExpectedRef.current && now - lastSeenRef.current.system > MISSING_AFTER_MS;
       setMissing((m) => (m.mic === mic && m.system === system ? m : { mic, system }));
     }, 1000);
     return () => clearInterval(check);
@@ -401,6 +315,45 @@ export default function IslandPage() {
   const outwards = side === 'right' ? 'left' : 'right';
   const inwards = side === 'right' ? 'right' : 'left';
 
+  // ---------- A Google Meet offer ----------
+  if (prompt) {
+    return (
+      <div style={row}>
+        <div ref={capsuleRef} className={`${capsuleClass} isl-prompt`} role="alertdialog" data-tauri-drag-region>
+          {prompt.kind === 'start' ? (
+            <>
+              <span className="isl-text" data-tauri-drag-region>
+                Нарада в Meet почалась
+              </span>
+              <span className="isl-sub" data-tauri-drag-region>
+                · запис не йде
+              </span>
+              <button type="button" className="isl-btn isl-btn-ghost isl-x" onClick={() => answerPrompt('no')} title="Не цього разу" aria-label="Не цього разу">
+                <XIcon />
+              </button>
+              <button type="button" className="isl-pill isl-pill-red" onClick={() => answerPrompt('start')}>
+                <i aria-hidden="true" />
+                Почати запис
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="isl-text" data-tauri-drag-region>
+                Нарада в Meet завершилась
+              </span>
+              <button type="button" className="isl-pill" onClick={() => answerPrompt('no')}>
+                Продовжити
+              </button>
+              <button type="button" className="isl-pill isl-pill-red" onClick={() => answerPrompt('stop')}>
+                Завершити запис
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // ---------- After «Завершити» ----------
   if (phase !== 'recording') {
     return (
@@ -461,7 +414,7 @@ export default function IslandPage() {
     : callIsMuted
       ? 'Звук дзвінка вимкнено. Натисніть, щоб увімкнути'
     : missing.system
-      ? 'Звук дзвінка не надходить понад 10 с. Перевірте дозвіл «Запис екрана» в Параметрах системи → Приватність і безпека.'
+      ? 'Звук дзвінка Google Meet не надходить понад 10 с. Перевірте дозвіл «Запис екрана й аудіо системи» в Параметрах системи → Приватність і безпека.'
       : 'Звук дзвінка записується. Натисніть, щоб вимкнути';
 
   const dot = <span className={`isl-dot ${paused ? 'isl-dot-paused' : ''}`} aria-label={paused ? 'Пауза' : 'Іде запис'} data-tauri-drag-region />;

@@ -1,7 +1,7 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
     "productName": "Протокол",
-    "version": "0.3.20",
+    "version": "0.3.21",
     "identifier": "ua.protokol.app",
     "build": {
         "frontendDist": "../out",
@@ -49,7 +49,7 @@
                 {
                     "identifier": "main",
                     "description": "Main window capability with file system and media access",
-                    "windows": ["main", "island"],
+                    "windows": ["main", "island", "meet"],
                     "permissions": [
                         "core:path:default",
                         "core:event:default",
@@ -68,6 +68,13 @@
                         "notification:allow-is-permission-granted",
                         "process:default"
                     ]
+                },
+                {
+                    "identifier": "meet-probe",
+                    "description": "Google Meet window: only the 2 s report of who speaks and the state of Meet's microphone button, only from https://meet.google.com",
+                    "windows": ["meet"],
+                    "remote": { "urls": ["https://meet.google.com/*"] },
+                    "permissions": ["meetprobe:allow-push", "meetprobe:allow-mic"]
                 }
             ]
         }

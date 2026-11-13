@@ -903,6 +903,7 @@ button:focus:not(:focus-visible) {
   backdrop-filter: blur(20px) saturate(180%);
 }
 .dark .isl-fallback { border-color: rgba(255, 255, 255, 0.14); }
+
 .isl-compact { padding-right: 12px; }
 .isl-dot {
   width: 10px;
@@ -1046,6 +1047,548 @@ button:focus:not(:focus-visible) {
     backdrop-filter: none;
   }
   .dark .isl-fallback { background: #1c1c1e; }
+}
+
+/* Google Meet offers in the island: the text and capsule buttons, red only
+   for recording */
+.isl-prompt { padding: 0 6px 0 16px; gap: 8px; }
+.isl-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  flex: none;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--isl-ctl);
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.isl-pill:hover { background: var(--isl-ctl-hover); }
+.isl-pill-red,
+.isl-pill-red:hover {
+  background: var(--isl-red);
+  color: #ffffff;
+}
+.isl-pill-red:hover { filter: brightness(1.08); }
+.isl-x { width: 24px; }
+/* The white record dot inside a red button */
+.isl-pill-red i,
+.mcap-rec i,
+.mpop-red i,
+.mstart-red i,
+.sheet-btn-red i {
+  display: block;
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+/* Capsule buttons of a question sheet in the main window (MeetPrompt) */
+.sheet-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--system-fill);
+  color: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.sheet-btn:hover { background: var(--system-fill-strong); }
+.sheet-btn-red,
+.sheet-btn-red:hover {
+  background: #e5352b;
+  color: #ffffff;
+}
+.dark .sheet-btn-red { background: #ff453a; }
+.sheet-btn-red:hover { filter: brightness(1.08); }
+
+/* ---------------------------------------------------------------------------
+   Google Meet window (meet/mod.rs): Protokol's toolbar over the Meet page,
+   with the start screen under it until a meeting is chosen (meet-bar), and
+   the offer under the toolbar's capsule (meet-pop)
+   --------------------------------------------------------------------------- */
+.mshell {
+  --m-bg: #f5f5f7;
+  --m-bar: #ececee;
+  --m-line: rgba(0, 0, 0, 0.08);
+  --m-fg: #1d1d1f;
+  --m-fg2: #6e6e73;
+  --m-glass: rgba(255, 255, 255, 0.78);
+  --m-glass-line: rgba(0, 0, 0, 0.08);
+  --m-glass-shadow: inset 0 1px 0 #ffffff, 0 3px 10px rgba(0, 0, 0, 0.08);
+  --m-ctl: rgba(0, 0, 0, 0.06);
+  --m-ctl-hover: rgba(0, 0, 0, 0.1);
+  --m-sep: rgba(0, 0, 0, 0.12);
+  --m-red: #e5352b;
+  --m-blue: #007aff;
+  --m-muted-bg: #ff9500;
+  --m-muted-fg: #ffffff;
+  --m-warn: #b35400;
+  --m-card: rgba(255, 255, 255, 0.85);
+  --m-card-line: rgba(0, 0, 0, 0.06);
+  --m-card-shadow: inset 0 1px 0 #ffffff, 0 6px 18px rgba(30, 40, 70, 0.08);
+  --m-row: rgba(255, 255, 255, 0.85);
+  --m-input: #ffffff;
+  --m-input-line: rgba(0, 0, 0, 0.12);
+  --isl-red: var(--m-red);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--m-bg);
+  color: var(--m-fg);
+  font: 13px/1.35 -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  cursor: default;
+}
+.dark .mshell {
+  --m-bg: #1c1c1e;
+  --m-bar: #2a2a2d;
+  --m-line: rgba(255, 255, 255, 0.07);
+  --m-fg: #f5f5f7;
+  --m-fg2: #a1a1a6;
+  --m-glass: rgba(255, 255, 255, 0.09);
+  --m-glass-line: rgba(255, 255, 255, 0.14);
+  --m-glass-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 3px 10px rgba(0, 0, 0, 0.25);
+  --m-ctl: rgba(255, 255, 255, 0.14);
+  --m-ctl-hover: rgba(255, 255, 255, 0.22);
+  --m-sep: rgba(255, 255, 255, 0.18);
+  --m-red: #ff453a;
+  --m-blue: #0a84ff;
+  --m-muted-bg: #ff9f0a;
+  --m-muted-fg: #1d1d1f;
+  --m-warn: #ffb340;
+  --m-card: rgba(255, 255, 255, 0.07);
+  --m-card-line: rgba(255, 255, 255, 0.12);
+  --m-card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  --m-row: rgba(255, 255, 255, 0.05);
+  --m-input: rgba(0, 0, 0, 0.25);
+  --m-input-line: rgba(255, 255, 255, 0.16);
+}
+.mshell button { font-family: inherit; }
+
+/* The toolbar: room on the left for the window's traffic lights */
+.mbar {
+  height: 52px;
+  flex: none;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 0 84px;
+  background: var(--m-bar);
+  border-bottom: 1px solid var(--m-line);
+}
+.mbar-title {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.25;
+}
+.mbar-title b,
+.mbar-title span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mbar-title b { font-size: 13px; font-weight: 600; }
+.mbar-title span { font-size: 11.5px; color: var(--m-fg2); }
+.mbar-title .mbar-warn { color: var(--m-warn); font-weight: 600; }
+.mbar-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  flex: none;
+  padding: 0 12px;
+  border: 1px solid var(--m-glass-line);
+  border-radius: 15px;
+  background: var(--m-glass);
+  color: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mbar-btn:hover { background: var(--m-ctl-hover); }
+
+/* The recording capsule in the toolbar: the island's controls on the same glass */
+.mcap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 36px;
+  flex: none;
+  box-sizing: border-box;
+  padding: 0 4px 0 12px;
+  border: 1px solid var(--m-glass-line);
+  border-radius: 18px;
+  background: var(--m-glass);
+  box-shadow: var(--m-glass-shadow);
+  white-space: nowrap;
+}
+.mcap-idle { padding: 0 4px; }
+.mcap .isl-dot {
+  width: 9px;
+  height: 9px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--m-red) 22%, transparent);
+}
+.mcap .isl-dot-paused { box-shadow: none; }
+.mcap-time {
+  width: 46px;
+  flex: none;
+  text-align: center;
+  font-size: 13.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.mcap-time-hours { width: 62px; }
+.mcap-sep {
+  width: 1px;
+  height: 18px;
+  flex: none;
+  margin: 0 2px;
+  background: var(--m-sep);
+}
+.mcap-src {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  min-width: 48px;
+  flex: none;
+  box-sizing: border-box;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), color 0.3s ease;
+}
+.mcap-src:hover { background: var(--m-ctl); }
+.mcap-src .isl-bars { height: 14px; }
+.mcap-muted,
+.mcap-muted:hover {
+  background: var(--m-muted-bg);
+  color: var(--m-muted-fg);
+}
+.mcap-muted span { padding-right: 3px; }
+/* The camera: off is the quiet state; on is marked, since the secretary is seen */
+.mcap-cam { min-width: 32px; }
+.mcap-cam-off { color: var(--m-fg2); }
+.mcap-cam-on,
+.mcap-cam-on:hover {
+  background: color-mix(in srgb, var(--m-blue) 22%, transparent);
+  color: var(--m-blue);
+}
+.mcap-paused {
+  padding: 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--m-fg2);
+}
+.mcap-btn {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: var(--m-ctl);
+  color: inherit;
+}
+.mcap-btn:hover { background: var(--m-ctl-hover); }
+.mcap-stop,
+.mcap-stop:hover {
+  background: var(--m-red);
+  color: #ffffff;
+}
+.mcap-stop:hover { filter: brightness(1.08); }
+.mcap-rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  flex: none;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--m-red);
+  color: #ffffff;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mcap-rec:hover { filter: brightness(1.08); }
+/* A call runs and nothing is recorded: the button keeps asking softly */
+.mcap-rec-ask { animation: mcap-ask 2s ease-in-out infinite; }
+@keyframes mcap-ask {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--m-red) 45%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--m-red) 0%, transparent); }
+}
+
+/* The start screen, in the app's theme instead of Google's white page */
+.mstart {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 34px 36px 22px;
+}
+.mstart > * { width: 100%; max-width: 720px; }
+.mstart-h {
+  margin: 0;
+  text-align: center;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+.mstart-cards {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+.mstart-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--m-card-line);
+  border-radius: 20px;
+  background: var(--m-card);
+  box-shadow: var(--m-card-shadow);
+}
+.mstart-card h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+.mstart-card p {
+  flex: 1;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--m-fg2);
+}
+.mstart-join { flex: 1; display: flex; flex-direction: column; gap: 10px; }
+.mstart-join label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--m-fg2);
+}
+.mstart-join input {
+  width: 100%;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid var(--m-input-line);
+  border-radius: 10px;
+  background: var(--m-input);
+  color: var(--m-fg);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.mstart-join input:focus {
+  border-color: var(--m-blue);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--m-blue) 25%, transparent);
+}
+.mstart-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  flex: none;
+  align-self: flex-start;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--m-ctl);
+  color: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mstart-btn:hover { background: var(--m-ctl-hover); }
+.mstart-join .mstart-btn { margin-top: auto; }
+.mstart-blue,
+.mstart-blue:hover {
+  background: var(--m-blue);
+  color: #ffffff;
+}
+.mstart-red,
+.mstart-red:hover {
+  background: var(--m-red);
+  color: #ffffff;
+}
+.mstart-blue:hover,
+.mstart-red:hover { filter: brightness(1.08); }
+.mstart-error {
+  margin: 0;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--m-red);
+}
+.mstart-list { display: flex; flex-direction: column; gap: 6px; }
+.mstart-list h3 {
+  margin: 4px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  color: var(--m-fg2);
+}
+.mstart-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px 9px 14px;
+  border-radius: 14px;
+  background: var(--m-row);
+}
+.mstart-row .mstart-btn { align-self: center; }
+.mstart-time {
+  width: 44px;
+  flex: none;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.mstart-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.mstart-name b,
+.mstart-name span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mstart-name b { font-size: 13.5px; font-weight: 600; }
+.mstart-name span { font-size: 12px; color: var(--m-fg2); }
+.mstart-foot {
+  margin: auto 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: #8e8e93;
+}
+.mstart-foot .mstart-btn { align-self: auto; }
+
+/* The offer under the toolbar's capsule: a glass card with a tip pointing up
+   at the capsule. Its own transparent webview over the Meet page, so the
+   card is nearly opaque instead of blurring what is behind it. */
+.mpop {
+  --p-bg: rgba(250, 250, 252, 0.97);
+  --p-tip: #fafafc;
+  --p-line: rgba(0, 0, 0, 0.1);
+  --p-fg: #1d1d1f;
+  --p-fg2: #6e6e73;
+  --p-ctl: rgba(0, 0, 0, 0.06);
+  --p-ctl-hover: rgba(0, 0, 0, 0.1);
+  --p-red: #e5352b;
+  --p-shadow: inset 0 1px 0 #ffffff, 0 6px 14px rgba(30, 40, 70, 0.18);
+  position: relative;
+  box-sizing: border-box;
+  margin: 8px 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px 14px 12px;
+  border: 1px solid var(--p-line);
+  border-radius: 18px;
+  background: var(--p-bg);
+  box-shadow: var(--p-shadow);
+  color: var(--p-fg);
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  cursor: default;
+  animation: mpop-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.dark .mpop {
+  --p-bg: rgba(48, 48, 52, 0.97);
+  --p-tip: #303034;
+  --p-line: rgba(255, 255, 255, 0.16);
+  --p-fg: #ffffff;
+  --p-fg2: #c7c7cc;
+  --p-ctl: rgba(255, 255, 255, 0.14);
+  --p-ctl-hover: rgba(255, 255, 255, 0.22);
+  --p-red: #ff453a;
+  --p-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 6px 14px rgba(0, 0, 0, 0.5);
+}
+/* The tip points at «Почати запис»; for the end offer, at the stop button */
+.mpop::before {
+  content: '';
+  position: absolute;
+  top: -7px;
+  right: 50px;
+  width: 12px;
+  height: 12px;
+  background: var(--p-tip);
+  border-left: 1px solid var(--p-line);
+  border-top: 1px solid var(--p-line);
+  border-top-left-radius: 3px;
+  transform: rotate(45deg);
+}
+.mpop-stop::before { right: 16px; }
+@keyframes mpop-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+.mpop-title { margin: 0; font-size: 13px; font-weight: 600; }
+.mpop-sub { margin: -6px 0 0; font-size: 12px; line-height: 1.4; color: var(--p-fg2); overflow-wrap: anywhere; }
+.mpop-btns { display: flex; justify-content: flex-end; gap: 8px; }
+.mpop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--p-ctl);
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mpop-btn:hover { background: var(--p-ctl-hover); }
+.mpop-red,
+.mpop-red:hover {
+  background: var(--p-red);
+  color: #ffffff;
+}
+.mpop-red:hover { filter: brightness(1.08); }
+@media (prefers-reduced-motion: reduce) {
+  .mpop, .mcap-rec-ask { animation: none; }
+  .mcap-src { transition: none; }
 }
 
 /* ---------- Stenogram: docked player, compact icon buttons ---------- */

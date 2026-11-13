@@ -25,6 +25,7 @@ import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { MenuBridge } from '@/components/MenuBridge'
 import { FeedbackDialog } from '@/components/FeedbackDialog'
 import { CalendarReminder } from '@/components/CalendarReminder'
+import { MeetPrompt } from '@/components/MeetPrompt'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
 import { ThemeProvider, themeBootScript } from '@/contexts/ThemeContext'
 
@@ -331,6 +332,7 @@ function MainLayout({
                                   <Sidebar />
                                   <MainContent>{children}</MainContent>
                                   <CalendarReminder />
+                                  <MeetPrompt />
                                 </div>
                               )}
                               {/* Import audio overlay and dialog */}
@@ -359,10 +361,11 @@ function MainLayout({
 }
 
 
-/** The floating recording island is its own tiny window: no app chrome around it */
+/** The floating recording island and the Google Meet window's toolbar and
+    offer are their own small webviews: no app chrome around them */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  if (pathname?.startsWith('/island')) {
+  if (pathname?.startsWith('/island') || pathname?.startsWith('/meet-bar') || pathname?.startsWith('/meet-pop')) {
     return (
       <html lang="uk" suppressHydrationWarning>
         <head>

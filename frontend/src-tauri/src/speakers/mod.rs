@@ -20,6 +20,8 @@ pub mod journal;
 pub mod saved;
 pub mod time_map;
 pub mod aligner;
+pub mod meet;
+pub mod meet_names;
 
 use crate::audio::vad::SpeechSegment;
 
