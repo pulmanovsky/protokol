@@ -9,7 +9,7 @@ import { PermissionWarning } from '@/components/PermissionWarning';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
 import { SourcePicker } from '@/components/audio/SourcePicker';
 import { Upload, Video } from 'lucide-react';
-import { isMeetUrl, openMeet, useMeetSettings } from '@/lib/meet';
+import { isMeetUrl, openCallLink, openMeet } from '@/lib/meet';
 import { toast } from '@/lib/notice';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useImportDialog } from '@/contexts/ImportDialogContext';
@@ -95,12 +95,12 @@ export function TodayHome() {
     handleRecordingToggle();
   };
 
+  // Zoom, Teams: their own app. Google Meet links never leave Protokol (joinInApp)
   const openCall = (url: string) => {
-    invoke('open_external_url', { url }).catch((error) => console.error('Failed to open meeting link', error));
+    openCallLink(url).catch((error) => toast.error(`${error}`));
   };
 
-  // Google Meet links open in Protokol's own Meet window (Settings → Google Meet)
-  const meetSettings = useMeetSettings();
+  // Google Meet: Protokol's own Meet window; the recording is offered there once the call starts
   const joinInApp = (url: string | null, title?: string) => {
     openMeet(url, title).catch((error) => toast.error(`${error}`));
   };
@@ -168,7 +168,7 @@ export function TodayHome() {
               </div>
             </div>
             <div className="flex gap-2.5 flex-wrap">
-              {next.meeting_url && isMeetUrl(next.meeting_url) && meetSettings.openInApp ? (
+              {next.meeting_url && isMeetUrl(next.meeting_url) ? (
                 <button type="button" onClick={() => joinInApp(next.meeting_url, next.title)} className="secondary-button h-10 px-4 text-sm font-semibold">
                   Приєднатися в Протоколі
                 </button>

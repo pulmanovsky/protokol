@@ -228,20 +228,51 @@ const MEETING_HOSTS: &[&str] = &[
     "webex.com",
 ];
 
-/// Finds the first online-meeting link in free text.
+/// Finds the first online-meeting link in free text. A Google Meet link
+/// written as http:// or without the scheme («meet.google.com/abc-defg-hij»)
+/// comes back as https://, so it opens in Protokol's Meet window.
 pub fn find_meeting_url(text: &str) -> Option<String> {
     let mut rest = text;
-    while let Some(pos) = rest.find("https://") {
-        let candidate: String = rest[pos..]
-            .chars()
-            .take_while(|c| !c.is_whitespace() && !matches!(c, '<' | '>' | '"' | '\'' | ')' | ']'))
-            .collect();
-        let candidate = candidate.trim_end_matches(['.', ',', ';']).to_string();
-        let host = candidate["https://".len()..].split(['/', '?', '#']).next().unwrap_or("");
+    while let Some(pos) = rest.find("http") {
+        let tail = &rest[pos..];
+        let scheme_len = if tail.starts_with("https://") {
+            "https://".len()
+        } else if tail.starts_with("http://") {
+            "http://".len()
+        } else {
+            rest = &rest[pos + "http".len()..];
+            continue;
+        };
+        let candidate = link_at(tail);
+        let host = candidate[scheme_len..].split(['/', '?', '#']).next().unwrap_or("");
         if MEETING_HOSTS.iter().any(|h| host == *h || host.ends_with(&format!(".{h}"))) {
-            return Some(candidate);
+            return Some(format!("https://{}", &candidate[scheme_len..]));
         }
-        rest = &rest[pos + "https://".len()..];
+        rest = &rest[pos + scheme_len..];
+    }
+    bare_meet_link(text)
+}
+
+/// The link starting at the beginning of `text`, without the punctuation after it
+fn link_at(text: &str) -> String {
+    let link: String = text
+        .chars()
+        .take_while(|c| !c.is_whitespace() && !matches!(c, '<' | '>' | '"' | '\'' | ')' | ']'))
+        .collect();
+    link.trim_end_matches(['.', ',', ';']).to_string()
+}
+
+/// «meet.google.com/abc-defg-hij» written without https://
+fn bare_meet_link(text: &str) -> Option<String> {
+    const HOST: &str = "meet.google.com/";
+    let mut from = 0;
+    while let Some(pos) = text[from..].find(HOST).map(|p| p + from) {
+        let starts_word = text[..pos].chars().next_back().map_or(true, |c| !(c.is_alphanumeric() || matches!(c, '.' | '/' | '-' | '%')));
+        let link = link_at(&text[pos..]);
+        if starts_word && link.len() > HOST.len() {
+            return Some(format!("https://{link}"));
+        }
+        from = pos + HOST.len();
     }
     None
 }
@@ -428,6 +459,19 @@ END:VCALENDAR\r\n";
         );
         assert_eq!(find_meeting_url("Docs https://docs.google.com/x only"), None);
         assert_eq!(find_meeting_url("https://evil-zoom.us.example.com/j/1"), None);
+    }
+
+    #[test]
+    fn meet_links_always_come_back_as_https() {
+        assert_eq!(find_meeting_url("Нарада: meet.google.com/abc-defg-hij."), Some("https://meet.google.com/abc-defg-hij".to_string()));
+        assert_eq!(find_meeting_url("http://meet.google.com/abc-defg-hij?hs=224"), Some("https://meet.google.com/abc-defg-hij?hs=224".to_string()));
+        assert_eq!(
+            find_meeting_url("Docs https://docs.google.com/x then https://meet.google.com/abc-defg-hij"),
+            Some("https://meet.google.com/abc-defg-hij".to_string())
+        );
+        assert_eq!(find_meeting_url("meet.google.com/"), None);
+        assert_eq!(find_meeting_url("notmeet.google.com/abc"), None);
+        assert_eq!(find_meeting_url("Перерва о 12:00"), None);
     }
 
     #[test]

@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/core';
+import { toast } from '@/lib/notice';
 import { usePathname, useRouter } from 'next/navigation';
 import { SourcePicker } from '@/components/audio/SourcePicker';
-import { isMeetUrl, openMeet, useMeetSettings } from '@/lib/meet';
+import { isMeetUrl, loadMeetSettings, openCallLink } from '@/lib/meet';
 import {
   Dialog,
   DialogContent,
@@ -36,38 +36,37 @@ export function formatTime(iso: string): string {
 }
 
 /**
- * Shows "a meeting is starting, start recording?" when the calendar reminder
- * fires, and starts recording with the meeting's title.
+ * Shows "a meeting is starting" when the calendar reminder fires. Nothing is
+ * recorded unless «Почати запис» is pressed: a Google Meet link opens in
+ * Protokol's Meet window, which offers to start the recording once the call
+ * starts there.
  */
 export function CalendarReminder() {
   const [reminder, setReminder] = useState<ReminderPayload | null>(null);
+  // The last reminder stays drawn while the dialog fades out, so the closing
+  // frame never shows an empty «Почати запис» variant
+  const [last, setLast] = useState<ReminderPayload | null>(null);
   const pathname = usePathname();
   const router = useRouter();
-  const meetSettings = useMeetSettings();
+  // Settings → Google Meet, read when the reminder comes
+  const [offerStart, setOfferStart] = useState(true);
 
   useEffect(() => {
-    const unlisten = listen<ReminderPayload>('calendar-meeting-reminder', (e) => setReminder(e.payload));
+    const unlisten = listen<ReminderPayload>('calendar-meeting-reminder', (e) => {
+      setReminder(e.payload);
+      setLast(e.payload);
+      loadMeetSettings().then((s) => setOfferStart(s.remindStart));
+    });
     return () => {
       unlisten.then((fn) => fn());
     };
   }, []);
 
-  const startRecording = async (openCall: boolean) => {
+  /** «Почати запис»: the recording is named after the calendar event */
+  const startRecording = () => {
     if (!reminder) return;
     const { event } = reminder;
     setReminder(null);
-    if (openCall && event.meeting_url) {
-      try {
-        // A Google Meet link opens in Protokol's own Meet window (Settings → Google Meet)
-        if (inApp) {
-          await openMeet(event.meeting_url, event.title);
-        } else {
-          await invoke('open_external_url', { url: event.meeting_url });
-        }
-      } catch (error) {
-        console.error('Failed to open meeting link', error);
-      }
-    }
     sessionStorage.setItem(PENDING_MEETING_TITLE_KEY, event.title);
     if (pathname === '/') {
       window.dispatchEvent(new CustomEvent('start-recording-from-sidebar'));
@@ -77,11 +76,25 @@ export function CalendarReminder() {
     }
   };
 
-  const event = reminder?.event;
-  const inApp = isMeetUrl(event?.meeting_url) && meetSettings.openInApp;
+  /** Opens the call without recording: a Meet link in Protokol's Meet window, other services in their own app */
+  const openCall = async () => {
+    if (!reminder?.event.meeting_url) return;
+    const { event } = reminder;
+    setReminder(null);
+    try {
+      await openCallLink(event.meeting_url!, event.title);
+    } catch (error) {
+      toast.error(`${error}`);
+    }
+  };
+
+  const shown = reminder ?? last;
+  const event = shown?.event;
+  const meet = isMeetUrl(event?.meeting_url);
+  const otherCall = !meet && !!event?.meeting_url;
   const when =
-    reminder && reminder.minutes_until > 0
-      ? `Починається через ${reminder.minutes_until} хв`
+    shown && shown.minutes_until > 0
+      ? `Починається через ${shown.minutes_until} хв`
       : event
         ? `Почалася о ${formatTime(event.start)}`
         : '';
@@ -109,27 +122,33 @@ export function CalendarReminder() {
           </div>
         </DialogHeader>
         <DialogDescription className="text-[15px] leading-[1.5] text-gray-800">
-          Записати цю зустріч, щоб потім отримати стенограму та документ?
+          {!meet
+            ? 'Записати цю зустріч, щоб потім отримати стенограму та документ?'
+            : offerStart
+              ? 'Google Meet відкриється у вікні Протоколу. Коли нарада почнеться, з\'явиться пропозиція почати запис.'
+              : 'Google Meet відкриється у вікні Протоколу. Запис починається кнопкою «Почати запис» над нарадою.'}
         </DialogDescription>
         <div className="flex flex-col gap-2">
-          <div className="flex justify-center">
-            <SourcePicker align="center" />
-          </div>
-          <button
-            type="button"
-            onClick={() => startRecording(!!event?.meeting_url)}
-            className="record-button justify-center h-12 gap-2.5 text-[15px] font-semibold"
-          >
-            <span className="w-2.5 h-2.5 rounded-full bg-[#fff]" aria-hidden="true" />
-            {inApp ? 'Приєднатися в Протоколі і записувати' : event?.meeting_url ? 'Відкрити дзвінок і записувати' : 'Почати запис'}
-          </button>
-          <div className="grid grid-cols-2 gap-2">
-            {event?.meeting_url ? (
-              <button type="button" onClick={() => startRecording(false)} className="secondary-button h-11 text-sm font-semibold">
-                Лише записувати
+          {meet ? (
+            <button type="button" onClick={() => void openCall()} className="accent-button h-12 text-[15px] font-semibold">
+              Приєднатися в Протоколі
+            </button>
+          ) : (
+            <>
+              <div className="flex justify-center">
+                <SourcePicker align="center" />
+              </div>
+              <button type="button" onClick={startRecording} className="record-button justify-center h-12 gap-2.5 text-[15px] font-semibold">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#fff]" aria-hidden="true" />
+                Почати запис
               </button>
-            ) : (
-              <span />
+            </>
+          )}
+          <div className={`grid gap-2 ${otherCall ? 'grid-cols-2' : ''}`}>
+            {otherCall && (
+              <button type="button" onClick={() => void openCall()} className="secondary-button h-11 text-sm font-semibold">
+                Відкрити дзвінок
+              </button>
             )}
             <button type="button" onClick={() => setReminder(null)} className="secondary-button h-11 text-sm font-semibold text-[color:var(--muted-text)]">
               Не цього разу

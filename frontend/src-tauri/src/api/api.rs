@@ -1382,8 +1382,14 @@ pub async fn debug_backend_connection<R: Runtime>(app: AppHandle<R>) -> Result<S
 }
 
 #[tauri::command]
-pub async fn open_external_url(url: String) -> Result<(), String> {
+pub async fn open_external_url<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), String> {
     use std::process::Command;
+
+    // A Google Meet link never opens in a browser: Protokol's Meet window
+    if crate::meet::is_meet_link(&url) {
+        let start_screen = url::Url::parse(url.trim()).is_ok_and(|u| u.path() == "/");
+        return crate::meet::open(&app, (!start_screen).then_some(url.as_str()), None);
+    }
 
     let result = if cfg!(target_os = "windows") {
         Command::new("cmd").args(&["/C", "start", &url]).output()

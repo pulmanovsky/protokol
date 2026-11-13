@@ -1,6 +1,6 @@
 {
     "name": "protokol",
-    "version": "0.3.21",
+    "version": "0.3.23",
     "private": true,
     "main": "electron/main.js",
     "scripts": {

@@ -8,9 +8,18 @@ set -euo pipefail
 OUT=${1:?out dir}; BASE=${2:?base url}; NOTES=${3:-}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BUNDLE="$ROOT/../target/aarch64-apple-darwin/release/bundle/macos"
-# The version of what was built (not of the sources, which may have moved on)
-VERSION=$(defaults read "$(ls -d "$BUNDLE"/*.app | head -1)/Contents/Info.plist" CFBundleShortVersionString)
-ARCHIVE=$(ls "$BUNDLE"/*.app.tar.gz | head -1)
+# Exactly one updater archive: another app left in the bundle folder (a test
+# copy) must not lend its name or version
+ARCHIVES=("$BUNDLE"/*.app.tar.gz)
+if [ "${#ARCHIVES[@]}" -ne 1 ] || [ ! -f "${ARCHIVES[0]}" ]; then
+  echo "Expected one .app.tar.gz in $BUNDLE, found: ${ARCHIVES[*]}"; exit 1
+fi
+ARCHIVE=${ARCHIVES[0]}
+# The version of what was built (not of the sources, which may have moved on),
+# read from the app the archive was made of
+APP=${ARCHIVE%.tar.gz}
+[ -d "$APP" ] || { echo "No $APP next to its archive"; exit 1; }
+VERSION=$(defaults read "$APP/Contents/Info.plist" CFBundleShortVersionString)
 SIG="$ARCHIVE.sig"
 [ -f "$SIG" ] || { echo "No signature next to $ARCHIVE: build with the signing key"; exit 1; }
 NAME="Protokol_${VERSION}_aarch64.app.tar.gz"

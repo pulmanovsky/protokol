@@ -272,7 +272,7 @@ export default function MeetBar() {
           Протокол
         </button>
       </header>
-      {start && <StartScreen recording={rec.recording} />}
+      {start && <StartScreen />}
     </div>
   );
 }
@@ -289,7 +289,7 @@ function hhmm(iso: string) {
   return new Date(iso).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
 }
 
-function StartScreen({ recording }: { recording: boolean }) {
+function StartScreen() {
   const [link, setLink] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -318,14 +318,11 @@ function StartScreen({ recording }: { recording: boolean }) {
         .sort((a, b) => a.start.localeCompare(b.start)),
     [events, now],
   );
-  // The meeting that is on now or starts within 15 minutes gets «Приєднатися і записувати»
-  const current = today.find((e) => new Date(e.start).getTime() - now.getTime() <= 15 * 60_000) ?? null;
-
-  const go = async (target: string, title?: string, record = false) => {
+  // Joining never starts a recording: the offer to start it comes once the call starts
+  const go = async (target: string, title?: string) => {
     setError(null);
     try {
       await invoke('meet_go', { target, title: title ?? null });
-      if (record) await invoke('meet_start_recording');
     } catch (e) {
       setError(`${e}`);
     }
@@ -390,7 +387,6 @@ function StartScreen({ recording }: { recording: boolean }) {
           {today.map((e) => {
             const started = new Date(e.start).getTime() <= now.getTime();
             const minutesAgo = Math.max(0, Math.round((now.getTime() - new Date(e.start).getTime()) / 60_000));
-            const record = !recording && current?.uid === e.uid;
             return (
               <div key={e.uid} className="mstart-row">
                 <span className="mstart-time">{hhmm(e.start)}</span>
@@ -398,13 +394,8 @@ function StartScreen({ recording }: { recording: boolean }) {
                   <b>{e.title}</b>
                   <span>{started ? (minutesAgo > 0 ? `Google Meet · почалась ${minutesAgo} хв тому` : 'Google Meet · починається зараз') : 'Google Meet'}</span>
                 </span>
-                <button
-                  type="button"
-                  className={`mstart-btn ${record ? 'mstart-red' : ''}`}
-                  onClick={() => void go(e.meeting_url ?? '', e.title, record)}
-                >
-                  {record && <i aria-hidden="true" />}
-                  {record ? 'Приєднатися і записувати' : 'Приєднатися'}
+                <button type="button" className="mstart-btn" onClick={() => void go(e.meeting_url ?? '', e.title)}>
+                  Приєднатися
                 </button>
               </div>
             );

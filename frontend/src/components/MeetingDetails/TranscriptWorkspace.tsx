@@ -36,6 +36,13 @@ function stripTop(word: DOMRect, options: number): number {
 /** Short function words: a doubt on them is noise unless recognition was really unsure */
 const FUNCTION_WORDS = new Set(['й', 'і', 'у', 'в', 'з', 'а', 'та', 'чи', 'же', 'ж', 'би', 'б', 'не', 'ні', 'що', 'як', 'це']);
 const VERY_UNSURE = 0.2;
+/** Checked by reading (see readIds): words read per second, the least time on
+ * one line, how long after the last key or mouse move reading still counts */
+const READ_WORDS_PER_S = 5;
+const READ_MIN_S = 1;
+const READ_IDLE_MS = 60_000;
+const READ_TICK_MS = 500;
+
 function needsReview(word: string, probability: number): boolean {
   return !FUNCTION_WORDS.has(bareWord(word).toLowerCase()) || probability < VERY_UNSURE;
 }
@@ -621,6 +628,68 @@ export function TranscriptWorkspace({
     },
     [meetingId],
   );
+
+  // Checked by reading: a line counts as checked once it has been in front of
+  // the secretary long enough to read it. Lines are read top to bottom: the
+  // time spent on the screen goes to the first unread line that is in view,
+  // then to the next. Only while Protokol is in front and was used in the
+  // last minute, so a screen left open does not check anything.
+  const [readIds, setReadIds] = useState<Set<string>>(new Set());
+  const readCredit = useRef(new Map<string, number>());
+  const lastInput = useRef(Date.now());
+  useEffect(() => {
+    readCredit.current = new Map();
+  }, [meetingId]);
+  // Lines loaded again carry their own mark from the database
+  useEffect(() => {
+    setReadIds(new Set());
+  }, [meetingId, transcripts]);
+  useEffect(() => {
+    const used = () => {
+      lastInput.current = Date.now();
+    };
+    const kinds = ['keydown', 'mousemove', 'mousedown', 'wheel', 'scroll', 'touchstart'] as const;
+    kinds.forEach((k) => window.addEventListener(k, used, { capture: true, passive: true }));
+    return () => kinds.forEach((k) => window.removeEventListener(k, used, { capture: true }));
+  }, []);
+  const readIdsRef = useRef(readIds);
+  readIdsRef.current = readIds;
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const surface = surfaceRef.current;
+      if (!surface || document.visibilityState !== 'visible' || !document.hasFocus()) return;
+      if (Date.now() - lastInput.current > READ_IDLE_MS) return;
+      const box = surface.getBoundingClientRect();
+      if (box.height <= 0) return;
+      const byId = new Map(rowsRef.current.map((r) => [r.id, r]));
+      let budget = READ_TICK_MS / 1000;
+      const done: string[] = [];
+      for (const el of Array.from(surface.querySelectorAll<HTMLElement>('[data-row]'))) {
+        const rect = el.getBoundingClientRect();
+        if (rect.bottom <= box.top) continue;
+        if (rect.top >= box.bottom) break;
+        const id = el.getAttribute('data-row') ?? '';
+        const row = byId.get(id);
+        if (!row || row.reviewed || readIdsRef.current.has(id)) continue;
+        // Mostly in view: a line cut off at the edge is not read yet
+        const seen = Math.min(rect.bottom, box.bottom) - Math.max(rect.top, box.top);
+        if (seen < Math.min(rect.height, box.height) * 0.6) continue;
+        const need = Math.max(READ_MIN_S, wordsOf(row.text ?? '').length / READ_WORDS_PER_S);
+        const credit = (readCredit.current.get(id) ?? 0) + budget;
+        if (credit < need) {
+          readCredit.current.set(id, credit);
+          break;
+        }
+        readCredit.current.delete(id);
+        done.push(id);
+        budget = credit - need;
+      }
+      if (done.length === 0) return;
+      setReadIds((prev) => new Set([...prev, ...done]));
+      void markReviewed(done);
+    }, READ_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [markReviewed]);
 
   // A corrected line is saved (one step of the history) and counts as checked
   // Rules made from a fix typed in the text (wrong → right), and what they changed in the rest of the meeting
@@ -1526,7 +1595,7 @@ export function TranscriptWorkspace({
             speaker={r.speaker}
             showName={i === 0 || rows[i - 1].speaker !== r.speaker}
             color={colorOf(r.speaker)}
-            reviewed={r.reviewed}
+            reviewed={r.reviewed || readIds.has(r.id)}
             excluded={!!r.excluded}
             manual={r.manual}
             voiceNote={voiceRows.has(r.id) && qItem?.rowId !== r.id}

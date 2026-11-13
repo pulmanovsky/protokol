@@ -151,6 +151,12 @@ fn first_in_a_while(host: &str) -> bool {
     }
 }
 
+/// A Google Meet link (https://meet.google.com/…): such a link never opens
+/// in a browser, only in Protokol's Meet window
+pub fn is_meet_link(url: &str) -> bool {
+    Url::parse(url.trim()).is_ok_and(|u| u.scheme() == "https" && u.host_str() == Some("meet.google.com"))
+}
+
 /// A meeting address typed or pasted by the user: only https://meet.google.com/…
 fn meeting_url(input: Option<&str>) -> Result<Url, String> {
     let text = input.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("https://meet.google.com/");
@@ -274,6 +280,7 @@ fn build_window<R: Runtime>(app: &AppHandle<R>, url: Url) -> tauri::Result<()> {
     let window = tauri::window::WindowBuilder::from_config(app, &config)?.build()?;
     let (width, height) = logical_size(&window);
 
+    let handle = app.clone();
     let page = WebviewBuilder::new(PAGE_LABEL, WebviewUrl::External(url))
         .user_agent(SAFARI_UA)
         .initialization_script(CAPTURE_JS)
@@ -294,9 +301,12 @@ fn build_window<R: Runtime>(app: &AppHandle<R>, url: Url) -> tauri::Result<()> {
             }
             false
         })
-        // Links Meet opens in a new window (chat links, help): the default browser
-        .on_new_window(|url, _features| {
-            if matches!(url.scheme(), "https" | "http") {
+        // Links Meet opens in a new window (chat links, help): the default
+        // browser, except a Meet link, which stays in this window
+        .on_new_window(move |url, _features| {
+            if is_meet_link(url.as_str()) {
+                another_meeting(&handle, &url);
+            } else if matches!(url.scheme(), "https" | "http") {
                 info!("Meet: new window {} opens in the default browser", url.host_str().unwrap_or("?"));
                 let _ = std::process::Command::new("open").arg(url.as_str()).spawn();
             }
@@ -321,6 +331,24 @@ fn build_window<R: Runtime>(app: &AppHandle<R>, url: Url) -> tauri::Result<()> {
     )?;
     let _ = pop.hide();
     Ok(())
+}
+
+/// A Meet link the page wanted in a new window: this window goes to it,
+/// unless a call is on here (the call is not left by a click on a link)
+fn another_meeting<R: Runtime>(app: &AppHandle<R>, url: &Url) {
+    if live::current().in_call {
+        info!("Meet: a Meet link from the page is not opened during the call");
+        return;
+    }
+    info!("Meet: a Meet link from the page opens in this window");
+    // Not from inside the page's own callback
+    let (app, url) = (app.clone(), url.clone());
+    tauri::async_runtime::spawn(async move {
+        if let Some(page) = app.get_webview(PAGE_LABEL) {
+            chosen();
+            let _ = page.navigate(url);
+        }
+    });
 }
 
 fn logical_size<R: Runtime>(window: &Window<R>) -> (f64, f64) {
@@ -570,8 +598,6 @@ fn check_sign_in<R: Runtime>(webview: &Webview<R>) {
 // Settings → Google Meet
 // ---------------------------------------------------------------------------
 
-/// «Відкривати наради Google Meet у вікні Протоколу»
-pub const OPEN_IN_APP: &str = "meet_open_in_app";
 /// «Нагадувати почати запис, коли нарада почалась»
 pub const REMIND_START: &str = "meet_remind_start";
 /// «Пропонувати завершити запис, коли нарада завершилась»
@@ -601,7 +627,6 @@ pub async fn split_on(pool: &SqlitePool) -> bool {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MeetSettings {
-    open_in_app: bool,
     remind_start: bool,
     offer_stop: bool,
     split: bool,
@@ -612,7 +637,6 @@ pub struct MeetSettings {
 pub async fn get_meet_settings<R: Runtime>(app: AppHandle<R>) -> Result<MeetSettings, String> {
     let pool = pool(&app).ok_or("Немає бази даних")?;
     Ok(MeetSettings {
-        open_in_app: flag_on(&pool, OPEN_IN_APP).await,
         remind_start: flag_on(&pool, REMIND_START).await,
         offer_stop: flag_on(&pool, OFFER_STOP).await,
         split: flag_on(&pool, SPLIT).await,
@@ -620,11 +644,10 @@ pub async fn get_meet_settings<R: Runtime>(app: AppHandle<R>) -> Result<MeetSett
     })
 }
 
-/// `key`: openInApp, remindStart, offerStop, split or micSync
+/// `key`: remindStart, offerStop, split or micSync
 #[tauri::command]
 pub async fn set_meet_setting<R: Runtime>(app: AppHandle<R>, key: String, on: bool) -> Result<(), String> {
     let flag = match key.as_str() {
-        "openInApp" => OPEN_IN_APP,
         "remindStart" => REMIND_START,
         "offerStop" => OFFER_STOP,
         "split" => SPLIT,

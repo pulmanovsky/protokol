@@ -4,7 +4,6 @@ import { listen } from '@tauri-apps/api/event';
 
 /** Settings → Google Meet switches (meet/mod.rs) */
 export interface MeetSettings {
-  openInApp: boolean;
   remindStart: boolean;
   offerStop: boolean;
   split: boolean;
@@ -73,7 +72,7 @@ export interface VoiceMatch {
 /** Where a speaker's shown name came from (meeting_speakers.name_source) */
 export type NameSource = 'voice' | 'meet_link' | 'meet_link_doubt' | 'meet_same_name' | 'meet';
 
-const DEFAULT_SETTINGS: MeetSettings = { openInApp: true, remindStart: true, offerStop: true, split: true, micSync: true };
+const DEFAULT_SETTINGS: MeetSettings = { remindStart: true, offerStop: true, split: true, micSync: true };
 
 export function isMeetUrl(url: string | null | undefined): boolean {
   if (!url) return false;
@@ -111,9 +110,10 @@ export async function openMeet(url?: string | null, title?: string | null): Prom
   await invoke('meet_open', { url: url ?? null, title: title ?? null });
 }
 
-/** A meeting link: in Protokol's Meet window when it is a Meet link and the setting is on, else the browser */
+/** A meeting link: a Google Meet link always opens in Protokol's Meet window,
+ * never in a browser; other services (Zoom, Teams) open in their own app */
 export async function openCallLink(url: string, title?: string | null): Promise<void> {
-  if (isMeetUrl(url) && (await loadMeetSettings()).openInApp) {
+  if (isMeetUrl(url)) {
     await openMeet(url, title);
   } else {
     await invoke('open_external_url', { url });

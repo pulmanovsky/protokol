@@ -101,14 +101,6 @@ export function MeetSettings() {
 
   return (
     <div className="flex flex-col gap-6">
-      <SettingsGroup title="Вікно наради">
-        <SettingsRow
-          label={<Label title="Відкривати наради Google Meet у вікні Протоколу" sub="Кнопки в картці наради і в нагадуваннях календаря. Вимкнено: у браузері, як раніше" />}
-        >
-          {toggle('openInApp', 'Відкривати наради Google Meet у вікні Протоколу')}
-        </SettingsRow>
-      </SettingsGroup>
-
       <SettingsGroup title="Запис">
         <SettingsRow label={<Label title="Нагадувати почати запис, коли нарада почалась" sub="Якщо у вікні Meet почалась нарада, а запис не йде" />}>
           {toggle('remindStart', 'Нагадувати почати запис')}
