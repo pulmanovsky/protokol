@@ -20,7 +20,7 @@ pub async fn api_glossary_suggestions(
     Ok(super::corrections::suggestions_from(
         &[texts.join("\n")],
         &super::glossary_terms(),
-        &super::corrections::corrections(),
+        &super::corrections::enabled_corrections(),
         &super::corrections::dismissed(),
     ))
 }
@@ -102,6 +102,10 @@ pub struct CorrectionPair {
     /// Made for the second time: remembered without asking
     #[serde(default)]
     pub remembered: bool,
+    /// Changes words by itself once remembered (a name, an abbreviation);
+    /// any other rule only underlines the word with its variant
+    #[serde(default)]
+    pub auto: bool,
 }
 
 async fn meeting_folder(pool: &sqlx::SqlitePool, meeting_id: &str) -> Option<std::path::PathBuf> {
@@ -218,8 +222,20 @@ pub async fn edit_line(pool: &sqlx::SqlitePool, meeting_id: &str, segment_id: &s
     if !finished {
         return Ok(Vec::new());
     }
+    // Putting back what was recognised where a correction changed it: that
+    // rule is from now on only offered, and the undo itself teaches nothing
+    let mut undone: Vec<(String, String)> = Vec::new();
+    for (w, r) in super::learning::edit_pairs(before.unwrap_or(&current), &text) {
+        if let Some(rule) = super::corrections::undone_rule(&w, &r) {
+            if let Err(e) = super::corrections::set_hint_only(&rule) {
+                log::warn!("Could not switch an undone correction to a hint: {e}");
+            }
+            undone.push((w, r));
+        }
+    }
     // Learn against what was recognised, not an earlier hand edit
     let mut pairs = super::learning::edit_pairs(original.as_deref().unwrap_or(&current), &text);
+    pairs.retain(|(w, r)| !undone.iter().any(|(a, b)| a.to_lowercase() == r.to_lowercase() && b.to_lowercase() == w.to_lowercase() || (a == w && b == r)));
     if let Some(b) = before {
         pairs.retain(|(_, right)| !b.contains(right.as_str()));
     }
@@ -237,7 +253,11 @@ pub async fn edit_line(pool: &sqlx::SqlitePool, meeting_id: &str, segment_id: &s
             crate::learned_events::note("word", wrong, right, 1, Some(meeting_id));
         }
     }
-    Ok(pairs.into_iter().zip(learned).map(|((wrong, right), remembered)| CorrectionPair { wrong, right, remembered }).collect())
+    Ok(pairs
+        .into_iter()
+        .zip(learned)
+        .map(|((wrong, right), remembered)| CorrectionPair { auto: super::corrections::applies_by_itself_now(&wrong, &right), wrong, right, remembered })
+        .collect())
 }
 
 #[tauri::command]
@@ -390,7 +410,39 @@ fn rules_to_apply(all: Vec<(String, String)>, only: Option<&[String]>) -> Vec<(S
     }
 }
 
+/// Reads the words of all checked lines (`corrections::set_checked_words`)
+pub async fn refresh_checked_words(pool: &sqlx::SqlitePool) -> Result<(), String> {
+    let texts: Vec<String> = sqlx::query_scalar("SELECT transcript FROM transcripts WHERE reviewed_at IS NOT NULL").fetch_all(pool).await.map_err(|e| e.to_string())?;
+    let words = texts.iter().flat_map(|t| t.split_whitespace()).map(crate::quality::score::norm).filter(|w| !w.is_empty()).collect();
+    super::corrections::set_checked_words(words);
+    Ok(())
+}
+
+/// Keeps the checked words up to date: once the database is open, then
+/// every few minutes
+pub fn start_checked_words_loop(app: tauri::AppHandle) {
+    use tauri::Manager;
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let wait = match app.try_state::<crate::state::AppState>() {
+                Some(state) => {
+                    if let Err(e) = refresh_checked_words(state.db_manager.pool()).await {
+                        log::warn!("Could not read the checked lines for learned corrections: {e}");
+                    }
+                    300
+                }
+                None => 2,
+            };
+            tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+        }
+    });
+}
+
 async fn apply_rules(pool: &sqlx::SqlitePool, meeting_id: &str, only: Option<&[String]>) -> Result<usize, String> {
+    // The lines just checked count too
+    if let Err(e) = refresh_checked_words(pool).await {
+        log::warn!("Could not read the checked lines for learned corrections: {e}");
+    }
     let pairs = rules_to_apply(super::corrections::corrections(), only);
     if pairs.is_empty() {
         return Ok(0);

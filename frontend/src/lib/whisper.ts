@@ -7,6 +7,8 @@ export interface ModelInfo {
   speed: ProcessingSpeed;
   status: ModelStatus;
   description?: string;
+  /** The file is this organisation's fine-tuned copy, used in place of the original */
+  tuned?: boolean;
 }
 
 export type ModelAccuracy = 'High' | 'Good' | 'Decent';

@@ -13,8 +13,9 @@ interface Correction {
 
 /**
  * «Вивчені виправлення»: what the user corrected in transcripts and asked
- * to remember. New recordings get these replacements right after
- * recognition; the right spellings also help recognition itself.
+ * to remember. In new recordings names and abbreviations are replaced right
+ * after recognition, other words are underlined with the right form; the
+ * right spellings also help recognition itself.
  */
 export function LearnedCorrections({ version }: { version: number }) {
   const [items, setItems] = useState<Correction[] | null>(null);
@@ -47,8 +48,9 @@ export function LearnedCorrections({ version }: { version: number }) {
       <div className="flex flex-col gap-1">
         <h2 className="text-[15px] font-bold text-gray-900">Вивчені виправлення</h2>
         <p className="text-sm text-[color:var(--muted-text)]">
-          Те, що ви виправили у стенограмі й попросили запам'ятати. У нових записах це виправляється одразу після
-          розпізнавання. Щоб виправити рядок, двічі клацніть по ньому у стенограмі.
+          Те, що ви виправили у стенограмі й попросили запам'ятати. Імена та скорочення в нових записах виправляються
+          одразу після розпізнавання, інші слова підкреслюються з варіантом виправлення. Щоб виправити рядок, двічі
+          клацніть по ньому у стенограмі.
         </p>
       </div>
       {items === null ? null : items.length === 0 ? (

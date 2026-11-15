@@ -102,6 +102,48 @@ SOFTWARE.
   `nvidia/parakeet-tdt-0.6b-v3`). Licence: Creative Commons Attribution 4.0
   International (CC BY 4.0), https://creativecommons.org/licenses/by/4.0/ .
 
+### Learning module (optional)
+
+- Downloaded only when recognition learning is turned on (Settings → Пам'ять),
+  from this project's release `learning-engine-1`, signed with the app's
+  update key. It trains a small addition to Whisper on this Mac, from the
+  meetings checked here; nothing leaves the Mac.
+- Python: the python-build-standalone build of CPython
+  (https://github.com/astral-sh/python-build-standalone), Python Software
+  Foundation License, https://docs.python.org/3/license.html .
+- MLX and mlx-metal (https://github.com/ml-explore/mlx), MIT, Copyright ©
+  2023 Apple Inc.
+- NumPy (https://numpy.org), BSD 3-Clause; tiktoken
+  (https://github.com/openai/tiktoken), MIT.
+- The Whisper model code and tokenizer files in
+  `scripts/learning-engine/whisper_mlx/` come from mlx-whisper 0.4.3
+  (https://github.com/ml-explore/mlx-examples), shortened as noted at the top
+  of each file; its MIT licence is in that folder and in the module:
+
+```
+MIT License
+
+Copyright © 2023 Apple Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Document
 
 ### MamayLM Gemma 3 12B

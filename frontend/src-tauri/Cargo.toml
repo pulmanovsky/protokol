@@ -1,6 +1,6 @@
 [package]
 name = "protokol"
-version = "0.3.23"
+version = "0.4.0"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
@@ -65,6 +65,9 @@ sha2 = "0.10"
 
 [dependencies]
 genpdf = "0.2.0"
+# The learning engine archive is checked with the key of the app's updates
+minisign-verify = "0.2"
+base64 = "0.22"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 anyhow = "1.0"

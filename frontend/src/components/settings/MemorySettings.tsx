@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/switch';
 import { SettingsGroup, SettingsRow } from '@/components/settings/SettingsGroup';
 import { plural } from '@/lib/plural';
 import { toast } from '@/lib/notice';
+import { LearningSettings } from '@/components/learning/LearningSettings';
 
 function LinkRow({ title, sub, count, onClick }: { title: string; sub: string; count: string; onClick: () => void }) {
   return (
@@ -70,6 +71,8 @@ export function MemorySettings() {
     <div className="flex flex-col gap-6">
       <p className="settings-help" style={{ marginTop: -8 }}>Що програма бере з ваших виправлень. Усе зберігається лише на цьому Mac.</p>
 
+      <LearningSettings />
+
       <SettingsGroup title="Люди" help="Голос зберігається, коли ви підписуєте спікера в стенограмі.">
         <SettingsRow
           label={
@@ -102,7 +105,7 @@ export function MemorySettings() {
         }}
       />
 
-      <SettingsGroup title="Написання" help="Правило створюється, коли ви виправляєте слово в стенограмі. Нові записи виправляються за ним автоматично, такі місця позначено.">
+      <SettingsGroup title="Написання" help="Правило створюється, коли ви виправляєте слово в стенограмі. Імена та скорочення в нових записах виправляються за ним автоматично, такі місця позначено; інші слова підкреслюються з варіантом виправлення.">
         <LinkRow
           title="Слова"
           sub="Як правильно писати імена, посади, абревіатури. Вручну, вивчені автоматично та підказки з останніх записів"

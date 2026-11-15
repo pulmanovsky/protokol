@@ -4,11 +4,15 @@
 
    ```bash
    cd frontend
+   RUSTFLAGS="--remap-path-prefix=$HOME=~" \
+   CFLAGS="-ffile-prefix-map=$HOME=~" CXXFLAGS="-ffile-prefix-map=$HOME=~" \
    TAURI_SIGNING_PRIVATE_KEY=<path to the key> TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
      pnpm exec tauri build --target aarch64-apple-darwin --bundles app,dmg -- --features metal
    ```
 
-2. Check that no test hooks are in the build: `strings <app>/Contents/MacOS/protokol | grep PROTOKOL_TEST` must print nothing. Check the FFmpeg inside: `<app>/Contents/MacOS/ffmpeg -version` starts with `ffmpeg version <version>-protokol-lgpl` and its configuration has no `--enable-gpl`.
+   The prefix maps keep the build machine's home folder (and so the login name) out of the published binaries; without them every crate's source path is written in as `/Users/<name>/…`.
+
+2. Check that no test hooks are in the build: `strings <app>/Contents/MacOS/protokol | grep PROTOKOL_TEST` must print nothing. Check that no local paths are in it: `strings <app>/Contents/MacOS/* | grep -c "/Users/"` must print 0. Check the FFmpeg inside: `<app>/Contents/MacOS/ffmpeg -version` starts with `ffmpeg version <version>-protokol-lgpl` and its configuration has no `--enable-gpl`.
 
 3. Make the update package:
 

@@ -107,7 +107,8 @@ fn toggle_recording_handler<R: Runtime>(app: &AppHandle<R>) {
 
             log::info!("Emitting start recording event from tray");
             if let Some(window) = app_clone.get_webview_window("main") {
-                let _ = window.eval("sessionStorage.setItem('autoStartRecording', 'true')"); // Set the flag to start recording automatically
+                // The home screen starts it on opening (valid for a few seconds, lib/autoStart.ts)
+                let _ = window.eval("sessionStorage.setItem('autoStartRecording', String(Date.now()))");
                 let _ = window.eval("window.location.assign('/')");
             }
         }

@@ -1116,6 +1116,138 @@ button:focus:not(:focus-visible) {
 .dark .sheet-btn-red { background: #ff453a; }
 .sheet-btn-red:hover { filter: brightness(1.08); }
 
+/* Settings → Пам'ять → «Розпізнавання мовлення» (components/learning) */
+.learn-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 11px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #1f8a3b;
+  background: rgba(52, 199, 89, 0.16);
+}
+.dark .learn-pill {
+  color: #4cd964;
+}
+.learn-track {
+  width: 120px;
+  height: 4px;
+  flex: none;
+  border-radius: 2px;
+  background: var(--system-fill-strong);
+  overflow: hidden;
+}
+.learn-track-wide {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+}
+.learn-fill {
+  height: 100%;
+  background: var(--blue);
+  transition: width 400ms ease;
+}
+
+/* «Історія донавчання»: one run per row */
+.learn-grid {
+  display: grid;
+  grid-template-columns: 46px 62px 142px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 44px;
+  padding: 6px 16px;
+  font-size: 14px;
+  color: rgb(var(--gray-900));
+}
+.learn-grid + .learn-grid {
+  border-top: 1px solid var(--hairline);
+}
+.learn-grid-head {
+  min-height: 32px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-text);
+}
+
+/* «Якість розпізнавання» */
+.learn-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--surface-bg);
+}
+.learn-tile-value {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--gray-900));
+}
+.learn-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  border-radius: 14px;
+  background: var(--surface-bg);
+}
+.learn-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 3px;
+  vertical-align: -1px;
+}
+.learn-bar-base {
+  background: #8e8e93;
+}
+.dark .learn-bar-base {
+  background: #636366;
+}
+.learn-bar-tuned {
+  background: var(--blue);
+}
+
+/* A capsule in two parts, as in macOS updates: the action on the left,
+   ⌄ on the right to choose it (LearningPrompts) */
+.learn-split {
+  display: inline-flex;
+  gap: 1px;
+}
+.learn-split-main,
+.learn-split-chev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  border: 0;
+  background: var(--blue);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.learn-split-main {
+  padding: 0 12px 0 14px;
+  border-radius: 16px 0 0 16px;
+}
+.learn-split-chev {
+  width: 30px;
+  padding-right: 2px;
+  border-radius: 0 16px 16px 0;
+}
+.learn-split-main:hover,
+.learn-split-chev:hover,
+.learn-split-chev[data-state="open"] {
+  filter: brightness(1.08);
+}
+
 /* ---------------------------------------------------------------------------
    Google Meet window (meet/mod.rs): Protokol's toolbar over the Meet page,
    with the start screen under it until a meeting is chosen (meet-bar), and

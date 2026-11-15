@@ -25,6 +25,7 @@ import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { MenuBridge } from '@/components/MenuBridge'
 import { FeedbackDialog } from '@/components/FeedbackDialog'
 import { CalendarReminder } from '@/components/CalendarReminder'
+import { LearningPrompts } from '@/components/learning/LearningPrompts'
 import { MeetPrompt } from '@/components/MeetPrompt'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
 import { ThemeProvider, themeBootScript } from '@/contexts/ThemeContext'
@@ -332,6 +333,7 @@ function MainLayout({
                                   <Sidebar />
                                   <MainContent>{children}</MainContent>
                                   <CalendarReminder />
+                                  <LearningPrompts />
                                   <MeetPrompt />
                                 </div>
                               )}

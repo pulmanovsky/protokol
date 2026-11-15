@@ -473,7 +473,7 @@ pub fn auto_learn(meetings: &[String]) -> Vec<String> {
     }
     let _ = save_meta(&meta);
     if !corrections_to_add.is_empty() {
-        let existing: HashSet<String> = corrections::corrections().into_iter().map(|(w, _)| w).collect();
+        let existing: HashSet<String> = corrections::enabled_corrections().into_iter().map(|(w, _)| w).collect();
         let fresh: Vec<(String, String)> = corrections_to_add.into_iter().filter(|(w, _)| !existing.contains(w)).collect();
         let _ = add_corrections(&fresh);
     }

@@ -89,7 +89,9 @@ fn discover_models_standalone() -> Result<Vec<ModelInfo>, String> {
     let mut models = Vec::new();
 
     for &(name, filename, size_mb, accuracy, speed, description) in model_configs {
-        let model_path = whisper_dir.join(filename);
+        let tuned_path = crate::config::tuned_model_file(&whisper_dir, filename);
+        let tuned = tuned_path.is_some();
+        let model_path = tuned_path.unwrap_or_else(|| whisper_dir.join(filename));
         let status = if model_path.exists() {
             match std::fs::metadata(&model_path) {
                 Ok(metadata) => {
@@ -114,6 +116,7 @@ fn discover_models_standalone() -> Result<Vec<ModelInfo>, String> {
             accuracy: accuracy.to_string(),
             speed: speed.to_string(),
             description: description.to_string(),
+            tuned,
         });
     }
 

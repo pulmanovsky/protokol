@@ -505,7 +505,7 @@ export function ModelManager({
               onDelete={() => deleteModel(model.name)}
               isDownloading={downloadingModels.has(model.name)}
               isCancelling={cancellingModels.has(model.name)}
-              displayName={getDisplayName(model.name)}
+              displayName={getDisplayName(model.name) + (model.tuned ? ' · донавчена' : '')}
             />
           );
         })}
@@ -536,7 +536,7 @@ export function ModelManager({
                     onDelete={() => deleteModel(model.name)}
                     isDownloading={downloadingModels.has(model.name)}
                     isCancelling={cancellingModels.has(model.name)}
-                    displayName={getDisplayName(model.name)}
+                    displayName={getDisplayName(model.name) + (model.tuned ? ' · донавчена' : '')}
                   />
                 ))}
               </div>

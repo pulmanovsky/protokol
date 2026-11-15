@@ -20,9 +20,10 @@
 //! The page itself cannot start, stop or read anything: it only sends reports
 //! and the state of its microphone button.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
+use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Listener, Manager, Runtime};
@@ -40,6 +41,12 @@ pub struct Prompt {
     /// The meeting's title: the calendar event the window was opened for, or
     /// the recording's name
     pub title: Option<String>,
+    /// Where the meeting is: "meet" (a call in Protokol's Meet window), "call"
+    /// (a call link opened in its own app, such as Zoom) or "calendar" (the
+    /// calendar event's time is over)
+    pub source: String,
+    /// The service of a "call" («Zoom», «Microsoft Teams»)
+    pub service: Option<String>,
 }
 
 /// What the recording view shows about the Meet window
@@ -87,6 +94,12 @@ struct Live {
 static LIVE: Lazy<Mutex<Live>> = Lazy::new(|| Mutex::new(Live::default()));
 /// «Записувати мікрофон, лише коли він увімкнений у Google Meet», as last read
 static MIC_SYNC: AtomicBool = AtomicBool::new(true);
+/// The end of the calendar event of a call opened in its own app, until its
+/// offer is answered
+static CALL_END: Lazy<Mutex<Option<DateTime<Utc>>>> = Lazy::new(|| Mutex::new(None));
+/// Counts the waits for a calendar event's end: a newer wait or the end of
+/// the recording makes the older ones void
+static END_WATCH: AtomicU64 = AtomicU64::new(0);
 
 enum Change {
     Started,
@@ -104,7 +117,10 @@ pub fn init<R: Runtime>(app: &AppHandle<R>) {
         dismiss(&handle, Some("start"));
     });
     let handle = app.clone();
-    app.listen("recording-stopped", move |_| dismiss(&handle, Some("stop")));
+    app.listen("recording-stopped", move |_| {
+        END_WATCH.fetch_add(1, Ordering::SeqCst);
+        dismiss(&handle, Some("stop"));
+    });
 }
 
 /// The window opened (or was asked for again with a calendar event)
@@ -309,7 +325,7 @@ async fn call_started<R: Runtime>(app: &AppHandle<R>) {
         l.start_offered = true;
         l.title.clone()
     };
-    show(app, Prompt { kind: "start".into(), title });
+    show(app, Prompt { kind: "start".into(), title, source: "meet".into(), service: None });
 }
 
 async fn call_ended<R: Runtime>(app: &AppHandle<R>) {
@@ -320,7 +336,7 @@ async fn call_ended<R: Runtime>(app: &AppHandle<R>) {
     if !super::flag_on(&pool, super::OFFER_STOP).await {
         return;
     }
-    show(app, Prompt { kind: "stop".into(), title: name.filter(|n| !n.trim().is_empty()) });
+    show(app, Prompt { kind: "stop".into(), title: name.filter(|n| !n.trim().is_empty()), source: "meet".into(), service: None });
 }
 
 fn show<R: Runtime>(app: &AppHandle<R>, prompt: Prompt) {
@@ -365,8 +381,12 @@ pub fn on_meet_focus<R: Runtime>(app: &AppHandle<R>) {
 /// it as a dialog; the floating island shows it while the person is outside
 /// Protokol (island.rs decides)
 fn place<R: Runtime>(app: &AppHandle<R>) {
-    let has = LIVE.lock().unwrap().prompt.is_some();
-    super::show_pop(app, has && crate::island::meet_is_last_in_front(app));
+    let (has, meet) = {
+        let l = LIVE.lock().unwrap();
+        (l.prompt.is_some(), l.prompt.as_ref().map_or(false, |p| p.source == "meet"))
+    };
+    // Only a call in the Meet window has its offer under that window's toolbar
+    super::show_pop(app, meet && crate::island::meet_is_last_in_front(app));
     crate::island::set_prompt(app, has);
 }
 
@@ -374,11 +394,78 @@ fn place<R: Runtime>(app: &AppHandle<R>) {
 /// same way as from the calendar reminder, named after the calendar event.
 /// No window is brought forward: the person stays in the call.
 fn start_recording<R: Runtime>(app: &AppHandle<R>) {
+    let title = LIVE.lock().unwrap().title.clone();
+    start_titled(app, title);
+}
+
+fn start_titled<R: Runtime>(app: &AppHandle<R>, title: Option<String>) {
     if crate::audio::recording_commands::recording_glance().is_some() {
         return;
     }
-    let title = LIVE.lock().unwrap().title.clone();
     let _ = app.emit_to("main", "meet-start-recording", serde_json::json!({ "title": title }));
+}
+
+fn parse_end(at: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(at).ok().map(|d| d.with_timezone(&Utc))
+}
+
+/// A call link was opened in its own app (Zoom, Teams): the same offer to
+/// start the recording as for a call in the Meet window. Nothing is recorded
+/// unless «Почати запис» is pressed. `ends_at` (the calendar event's end,
+/// RFC 3339) brings the offer to end that recording at that time.
+#[tauri::command]
+pub fn call_opened<R: Runtime>(app: AppHandle<R>, title: Option<String>, service: Option<String>, ends_at: Option<String>) {
+    if crate::audio::recording_commands::recording_glance().is_some() {
+        return;
+    }
+    *CALL_END.lock().unwrap() = ends_at.as_deref().and_then(parse_end);
+    let title = title.filter(|t| !t.trim().is_empty());
+    show(&app, Prompt { kind: "start".into(), title, source: "call".into(), service });
+}
+
+/// A recording started by hand for a calendar event: once the event's time is
+/// over, the offer to end it. It never ends by itself.
+#[tauri::command]
+pub fn call_watch_end<R: Runtime>(app: AppHandle<R>, title: Option<String>, ends_at: String) {
+    if let Some(end) = parse_end(&ends_at) {
+        watch_end(&app, title.filter(|t| !t.trim().is_empty()), end);
+    }
+}
+
+/// Waits for `end` by the wall clock (a Mac asleep through it offers on
+/// waking), then offers to end the recording if it is still the same one
+fn watch_end<R: Runtime>(app: &AppHandle<R>, title: Option<String>, end: DateTime<Utc>) {
+    if end <= Utc::now() {
+        return;
+    }
+    let turn = END_WATCH.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            if END_WATCH.load(Ordering::SeqCst) != turn {
+                return;
+            }
+            let left = (end - Utc::now()).num_milliseconds();
+            if left <= 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(left.min(30_000) as u64)).await;
+        }
+        let Some((_, _, name)) = crate::audio::recording_commands::recording_glance() else { return };
+        let name = name.filter(|n| !n.trim().is_empty());
+        // Another recording than the one started for this event
+        if let (Some(t), Some(n)) = (&title, &name) {
+            if t.trim() != n.trim() {
+                return;
+            }
+        }
+        // A call in the Meet window offers by itself when it ends
+        if LIVE.lock().unwrap().shown.in_call {
+            return;
+        }
+        log::info!("Calendar: the meeting's time is over, offering to end the recording");
+        show(&app, Prompt { kind: "stop".into(), title: name.or(title), source: "calendar".into(), service: None });
+    });
 }
 
 /// The toolbar's «Почати запис»
@@ -400,14 +487,21 @@ pub async fn meet_prompt_answer<R: Runtime>(app: AppHandle<R>, answer: String) -
     let Some(prompt) = LIVE.lock().unwrap().prompt.take() else { return Ok(()) };
     let _ = app.emit("meet-prompt", None::<Prompt>);
     place(&app);
+    let end = if prompt.source == "call" { CALL_END.lock().unwrap().take() } else { None };
     match (prompt.kind.as_str(), answer.as_str()) {
+        ("start", "start") if prompt.source == "call" => {
+            start_titled(&app, prompt.title.clone());
+            if let Some(end) = end {
+                watch_end(&app, prompt.title.clone(), end);
+            }
+        }
         ("start", "start") => start_recording(&app),
         ("stop", "stop") => {
             if crate::audio::recording_commands::recording_glance().is_some() {
                 crate::tray::handle_menu_event(&app, "stop_recording");
             }
         }
-        ("stop", "no") => continue_after_call(&app),
+        ("stop", "no") if prompt.source == "meet" => continue_after_call(&app),
         _ => {}
     }
     Ok(())

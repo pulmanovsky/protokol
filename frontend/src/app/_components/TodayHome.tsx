@@ -9,7 +9,7 @@ import { PermissionWarning } from '@/components/PermissionWarning';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
 import { SourcePicker } from '@/components/audio/SourcePicker';
 import { Upload, Video } from 'lucide-react';
-import { isMeetUrl, openCallLink, openMeet } from '@/lib/meet';
+import { isMeetUrl, openCallLink, openMeet, watchCalendarEnd } from '@/lib/meet';
 import { toast } from '@/lib/notice';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useImportDialog } from '@/contexts/ImportDialogContext';
@@ -90,14 +90,18 @@ export function TodayHome() {
 
   const recent = meetings.slice(0, RECENT_LIMIT);
 
+  // A meeting without a call link (in the room): recorded by this press; once
+  // its time is over, the offer to end the recording appears
   const recordEvent = (event: CalendarEvent) => {
     sessionStorage.setItem(PENDING_MEETING_TITLE_KEY, event.title);
     handleRecordingToggle();
+    watchCalendarEnd(event.title, event.end);
   };
 
-  // Zoom, Teams: their own app. Google Meet links never leave Protokol (joinInApp)
-  const openCall = (url: string) => {
-    openCallLink(url).catch((error) => toast.error(`${error}`));
+  // Zoom, Teams: their own app, then the offer to start the recording.
+  // Google Meet links never leave Protokol (joinInApp)
+  const openCall = (event: CalendarEvent) => {
+    openCallLink(event.meeting_url!, event.title, event.end).catch((error) => toast.error(`${error}`));
   };
 
   // Google Meet: Protokol's own Meet window; the recording is offered there once the call starts
@@ -167,20 +171,23 @@ export function TodayHome() {
                 </span>
               </div>
             </div>
+            {/* A call is only joined here: the recording is offered once the call
+                starts and begins only when «Почати запис» is pressed */}
             <div className="flex gap-2.5 flex-wrap">
               {next.meeting_url && isMeetUrl(next.meeting_url) ? (
-                <button type="button" onClick={() => joinInApp(next.meeting_url, next.title)} className="secondary-button h-10 px-4 text-sm font-semibold">
+                <button type="button" onClick={() => joinInApp(next.meeting_url, next.title)} className="accent-button h-10 px-4 text-sm font-semibold">
                   Приєднатися в Протоколі
                 </button>
               ) : next.meeting_url ? (
-                <button type="button" onClick={() => openCall(next.meeting_url!)} className="secondary-button h-10 px-4 text-sm font-semibold">
+                <button type="button" onClick={() => openCall(next)} className="accent-button h-10 px-4 text-sm font-semibold">
                   Відкрити дзвінок
                 </button>
-              ) : null}
-              <button type="button" onClick={() => recordEvent(next)} className="record-button h-10 px-4 gap-2 text-sm font-semibold">
-                <span className="w-2 h-2 rounded-full bg-white" aria-hidden="true" />
-                Записати цю зустріч
-              </button>
+              ) : (
+                <button type="button" onClick={() => recordEvent(next)} className="record-button h-10 px-4 gap-2 text-sm font-semibold">
+                  <span className="w-2 h-2 rounded-full bg-white" aria-hidden="true" />
+                  Записати цю зустріч
+                </button>
+              )}
             </div>
           </section>
         )}

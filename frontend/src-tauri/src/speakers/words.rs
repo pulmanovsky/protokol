@@ -36,6 +36,10 @@ pub struct PieceWords {
     /// words by the line's stored times. Empty when the two are the same.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub heard: Vec<(f64, f64)>,
+    /// The underline bars of the fine-tuned model that heard this piece;
+    /// none for the original model (`ukrainian::doubt::Thresholds`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bars: Option<crate::ukrainian::doubt::Thresholds>,
 }
 
 impl PieceWords {
@@ -104,7 +108,7 @@ fn mean(v: &[f32]) -> f32 {
 pub fn doubtful_in(piece: &PieceWords, terms: &[String]) -> Vec<bool> {
     let words: Vec<String> = piece.words.iter().map(|(w, _)| w.clone()).collect();
     let known = |w: &str| terms.iter().any(|t| t.eq_ignore_ascii_case(w) || t.to_lowercase() == w.to_lowercase());
-    crate::ukrainian::doubt::doubtful(&words, &piece.probs, &known)
+    crate::ukrainian::doubt::doubtful_with(&words, &piece.probs, &known, piece.bars.unwrap_or(crate::ukrainian::doubt::Thresholds::DEFAULT))
 }
 
 /// Doubtful words that sound like a dictionary term become that term; the
@@ -136,13 +140,15 @@ pub async fn transcribe_piece(
     language: Option<String>,
 ) -> anyhow::Result<Option<PieceWords>> {
     let terms = crate::ukrainian::glossary_terms();
+    let bars = engine.bars().await;
+    let bars = (bars != crate::ukrainian::doubt::Thresholds::DEFAULT).then_some(bars);
     let make = |text: String, words: Vec<(String, f64)>, probs: Vec<f32>| PieceWords {
         text: text.trim().to_string(),
         start: start_s,
         end: end_s,
         words: words.into_iter().map(|(w, t)| (w, start_s + t)).collect(),
         probs,
-        auto: Vec::new(), aligned: false, heard: vec![],
+        auto: Vec::new(), aligned: false, heard: vec![], bars,
     };
     let (text, words, probs) = engine.transcribe_audio_with_word_probs(samples.to_vec(), language.clone(), None).await?;
     let mut piece = make(text, words, probs);
@@ -358,11 +364,15 @@ fn common_words(a: &[String], b: &[String]) -> Vec<(usize, usize)> {
 pub fn doubts(pieces: &[PieceWords], rows: &[(String, String)], terms: &[String]) -> Vec<Doubt> {
     // Every word with its time, confidence, doubt and «heard as»
     let mut flat: Vec<(String, f64, f32, bool, Option<String>)> = Vec::new();
+    // Words a learned correction only offers to change are checked too
+    let hints = crate::ukrainian::corrections::hint_words();
     for p in pieces {
         let flags = doubtful_in(p, terms);
         for (i, (w, t)) in p.words.iter().enumerate() {
             let heard = p.auto.iter().find(|(j, _)| *j == i).map(|(_, h)| h.clone());
-            flat.push((w.clone(), *t, p.probs.get(i).copied().unwrap_or(1.0), flags.get(i).copied().unwrap_or(false), heard));
+            let prob = p.probs.get(i).copied().unwrap_or(1.0);
+            let doubtful = flags.get(i).copied().unwrap_or(false) || crate::ukrainian::doubt::hinted(w, prob, &hints);
+            flat.push((w.clone(), *t, prob, doubtful, heard));
         }
     }
     let forms: Vec<String> = flat.iter().map(|f| same_form(&f.0)).collect();
@@ -693,7 +703,7 @@ mod tests {
             end,
             words: words.iter().map(|(w, t)| (w.to_string(), *t)).collect(),
             probs: Vec::new(),
-            auto: Vec::new(), aligned: false, heard: vec![],
+            auto: Vec::new(), aligned: false, heard: vec![], bars: None,
         }
     }
 

@@ -5,7 +5,8 @@ import { listen } from '@tauri-apps/api/event';
 import { toast } from '@/lib/notice';
 import { usePathname, useRouter } from 'next/navigation';
 import { SourcePicker } from '@/components/audio/SourcePicker';
-import { isMeetUrl, loadMeetSettings, openCallLink } from '@/lib/meet';
+import { callService, isMeetUrl, loadMeetSettings, openCallLink, watchCalendarEnd } from '@/lib/meet';
+import { requestAutoStart } from '@/lib/autoStart';
 import {
   Dialog,
   DialogContent,
@@ -37,9 +38,12 @@ export function formatTime(iso: string): string {
 
 /**
  * Shows "a meeting is starting" when the calendar reminder fires. Nothing is
- * recorded unless «Почати запис» is pressed: a Google Meet link opens in
- * Protokol's Meet window, which offers to start the recording once the call
- * starts there.
+ * recorded unless «Почати запис» is pressed. A meeting with a call link only
+ * opens the call: a Google Meet link in Protokol's Meet window, which offers
+ * to start the recording once the call starts there; other services in their
+ * own app, after which the same offer appears. A meeting without a link (in
+ * the room) has «Почати запис» here, and once its time is over the offer to
+ * end the recording appears.
  */
 export function CalendarReminder() {
   const [reminder, setReminder] = useState<ReminderPayload | null>(null);
@@ -62,7 +66,7 @@ export function CalendarReminder() {
     };
   }, []);
 
-  /** «Почати запис»: the recording is named after the calendar event */
+  /** «Почати запис» (a meeting without a call link): the recording is named after the calendar event */
   const startRecording = () => {
     if (!reminder) return;
     const { event } = reminder;
@@ -71,9 +75,10 @@ export function CalendarReminder() {
     if (pathname === '/') {
       window.dispatchEvent(new CustomEvent('start-recording-from-sidebar'));
     } else {
-      sessionStorage.setItem('autoStartRecording', 'true');
+      requestAutoStart();
       router.push('/');
     }
+    watchCalendarEnd(event.title, event.end);
   };
 
   /** Opens the call without recording: a Meet link in Protokol's Meet window, other services in their own app */
@@ -82,7 +87,7 @@ export function CalendarReminder() {
     const { event } = reminder;
     setReminder(null);
     try {
-      await openCallLink(event.meeting_url!, event.title);
+      await openCallLink(event.meeting_url!, event.title, event.end);
     } catch (error) {
       toast.error(`${error}`);
     }
@@ -102,7 +107,7 @@ export function CalendarReminder() {
   const start = event ? new Date(event.start) : null;
   const month = start ? start.toLocaleDateString('uk-UA', { month: 'short' }).replace('.', '').toUpperCase() : '';
   const timeRange = event ? `${formatTime(event.start)}${event.end ? ` — ${formatTime(event.end)}` : ''}` : '';
-  const service = event?.meeting_url ? callServiceName(event.meeting_url) : event?.location;
+  const service = event?.meeting_url ? callService(event.meeting_url) : event?.location;
 
   return (
     <Dialog open={reminder !== null} onOpenChange={(open) => !open && setReminder(null)}>
@@ -122,7 +127,9 @@ export function CalendarReminder() {
           </div>
         </DialogHeader>
         <DialogDescription className="text-[15px] leading-[1.5] text-gray-800">
-          {!meet
+          {otherCall
+            ? `Дзвінок відкриється ${service ? `у ${service}` : 'у своїй програмі'}. Після цього з'явиться пропозиція почати запис.`
+            : !meet
             ? 'Записати цю зустріч, щоб потім отримати стенограму та документ?'
             : offerStart
               ? 'Google Meet відкриється у вікні Протоколу. Коли нарада почнеться, з\'явиться пропозиція почати запис.'
@@ -132,6 +139,10 @@ export function CalendarReminder() {
           {meet ? (
             <button type="button" onClick={() => void openCall()} className="accent-button h-12 text-[15px] font-semibold">
               Приєднатися в Протоколі
+            </button>
+          ) : otherCall ? (
+            <button type="button" onClick={() => void openCall()} className="accent-button h-12 text-[15px] font-semibold">
+              Відкрити дзвінок
             </button>
           ) : (
             <>
@@ -144,12 +155,7 @@ export function CalendarReminder() {
               </button>
             </>
           )}
-          <div className={`grid gap-2 ${otherCall ? 'grid-cols-2' : ''}`}>
-            {otherCall && (
-              <button type="button" onClick={() => void openCall()} className="secondary-button h-11 text-sm font-semibold">
-                Відкрити дзвінок
-              </button>
-            )}
+          <div className="grid gap-2">
             <button type="button" onClick={() => setReminder(null)} className="secondary-button h-11 text-sm font-semibold text-[color:var(--muted-text)]">
               Не цього разу
             </button>
@@ -158,16 +164,4 @@ export function CalendarReminder() {
       </DialogContent>
     </Dialog>
   );
-}
-
-function callServiceName(url: string): string | null {
-  try {
-    const host = new URL(url).hostname;
-    if (host.includes('meet.google')) return 'Google Meet';
-    if (host.includes('zoom')) return 'Zoom';
-    if (host.includes('teams')) return 'Microsoft Teams';
-    return host.replace(/^www\./, '');
-  } catch {
-    return null;
-  }
 }

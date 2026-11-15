@@ -13,6 +13,7 @@ pub mod hallucination;
 pub mod learning;
 pub mod orthography;
 pub mod pdf_export;
+pub mod piece_terms;
 
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;

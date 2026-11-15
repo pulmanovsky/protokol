@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, Suspense } from 'react';
-import { Settings2, Bell, Brain, HardDrive, Shield, Mic, AudioLines, FileText, CalendarDays, Palette, Video, Info as InfoIcon } from 'lucide-react';
+import { Settings2, Bell, Brain, HardDrive, Shield, Mic, AudioLines, FileText, CalendarDays, Palette, Video, Info as InfoIcon, ChevronLeft } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { TranscriptSettings } from '@/components/TranscriptSettings';
 import { RecordingSettings } from '@/components/RecordingSettings';
 import { GeneralSettings } from '@/components/settings/GeneralSettings';
@@ -20,6 +20,8 @@ import { About } from '@/components/About';
 import { DocumentTemplatesSettings } from '@/components/DocumentTemplatesSettings';
 import { AppearanceSettings } from '@/components/AppearanceSettings';
 import { useConfig } from '@/contexts/ConfigContext';
+import { LearningHistory } from '@/components/learning/LearningHistory';
+import { LearningQuality } from '@/components/learning/LearningQuality';
 
 // Sections in the order of the left list (macOS System Settings layout)
 const SECTIONS = [
@@ -50,6 +52,12 @@ const LEGACY_TABS: Record<string, SectionValue> = {
   about: 'about',
 };
 
+// Pages inside a section (?view=…), with «‹ section» above their title
+const VIEWS: Record<string, { section: SectionValue; title: string }> = {
+  history: { section: 'memory', title: 'Історія донавчання' },
+  quality: { section: 'memory', title: 'Якість розпізнавання' },
+};
+
 // Sections merged in 0.3.11 (links from older screens still work)
 const MERGED_SECTIONS: Record<string, SectionValue> = {
   protocol: 'document',
@@ -66,7 +74,9 @@ export default function SettingsPage() {
 
 function SettingsContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const tab = searchParams.get('tab');
+  const viewName = searchParams.get('view');
   const section = searchParams.get('section');
   const requested = (section && MERGED_SECTIONS[section]) || section || (tab ? LEGACY_TABS[tab] : null);
   // «Протокол → Перевірити оновлення…» opens «Про програму» with ?check=1
@@ -100,6 +110,7 @@ function SettingsContent() {
   }, [setTranscriptModelConfig]);
 
   const current = SECTIONS.find((s) => s.value === active)!;
+  const view = viewName && VIEWS[viewName]?.section === active ? VIEWS[viewName] : null;
 
   return (
     <div className="h-full min-h-0 flex flex-col">
@@ -116,7 +127,10 @@ function SettingsContent() {
               type="button"
               data-active={active === value}
               aria-current={active === value ? 'page' : undefined}
-              onClick={() => setActive(value)}
+              onClick={() => {
+                if (viewName) router.replace(`/settings?section=${value}`);
+                setActive(value);
+              }}
               className="nav-row h-8 px-2.5 gap-2.5 text-sm"
             >
               <Icon className="w-4 h-4 flex-shrink-0" />
@@ -127,14 +141,30 @@ function SettingsContent() {
         </nav>
 
         {/* The only scroll container on this screen */}
-        <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden custom-scrollbar" key={active}>
+        <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden custom-scrollbar" key={`${active}-${view?.title ?? ''}`}>
           <div className="settings-pane max-w-[680px] flex flex-col gap-5 pb-8 pr-2">
-            <h2 className="text-xl font-bold text-gray-900">{current.label}</h2>
-            {active === 'general' && <GeneralSettings />}
-            {active === 'notifications' && <NotificationsSettings />}
-            {active === 'recording' && <RecordingSettings />}
-            {active === 'meet' && <MeetSettings />}
-            {active === 'transcription' && (
+            {view ? (
+              <>
+                <button
+                  type="button"
+                  className="self-start -ml-1 -mb-3 inline-flex h-7 items-center gap-1 rounded-lg px-1 text-[13px] text-[color:var(--blue)] hover:bg-[var(--hover)]"
+                  onClick={() => router.push(`/settings?section=${view.section}`)}
+                >
+                  <ChevronLeft className="w-4 h-4" aria-hidden="true" />
+                  {current.label}
+                </button>
+                <h2 className="text-xl font-bold text-gray-900">{view.title}</h2>
+                {viewName === 'history' && <LearningHistory />}
+                {viewName === 'quality' && <LearningQuality />}
+              </>
+            ) : (
+              <h2 className="text-xl font-bold text-gray-900">{current.label}</h2>
+            )}
+            {!view && active === 'general' && <GeneralSettings />}
+            {!view && active === 'notifications' && <NotificationsSettings />}
+            {!view && active === 'recording' && <RecordingSettings />}
+            {!view && active === 'meet' && <MeetSettings />}
+            {!view && active === 'transcription' && (
               <>
                 <TranscriptSettings
                   transcriptModelConfig={transcriptModelConfig}
@@ -146,18 +176,18 @@ function SettingsContent() {
                 </SettingsGroup>
               </>
             )}
-            {active === 'document' && (
+            {!view && active === 'document' && (
               <>
                 <DocumentTemplatesSettings />
                 <SummaryModelSettings />
               </>
             )}
-            {active === 'memory' && <MemorySettings />}
-            {active === 'calendar' && <CalendarSettings />}
-            {active === 'appearance' && <AppearanceSettings />}
-            {active === 'storage' && <StorageSettings />}
-            {active === 'privacy' && <PrivacySettings />}
-            {active === 'about' && <About checkNow={checkNow} />}
+            {!view && active === 'memory' && <MemorySettings />}
+            {!view && active === 'calendar' && <CalendarSettings />}
+            {!view && active === 'appearance' && <AppearanceSettings />}
+            {!view && active === 'storage' && <StorageSettings />}
+            {!view && active === 'privacy' && <PrivacySettings />}
+            {!view && active === 'about' && <About checkNow={checkNow} />}
           </div>
         </div>
       </div>

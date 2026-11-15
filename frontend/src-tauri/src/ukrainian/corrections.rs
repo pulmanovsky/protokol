@@ -9,6 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::RwLock;
 
 use serde::Serialize;
 
@@ -43,15 +44,74 @@ pub(crate) fn write_lines(name: &str, lines: &[String]) -> Result<(), String> {
 }
 
 /// A learned correction: what was recognised, what it should be, whether
-/// it is applied (switched off in «Словник» it is kept but not used)
+/// it is used (switched off in «Словник» it is kept but not used), and
+/// whether the secretary undid it where it was applied on its own (from then
+/// on it is only offered)
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Correction {
     pub wrong: String,
     pub right: String,
     pub enabled: bool,
+    #[serde(rename = "hintOnly")]
+    pub hint_only: bool,
 }
 
-/// All saved corrections («wrong => right»; «!» in front: switched off)
+impl Correction {
+    /// Safe to apply without asking: the right form is a name, an
+    /// abbreviation or a nickname (it has a capital letter or a digit),
+    /// not just another ending of the same word, and it was never undone.
+    /// Any other rule only underlines the word and offers its right form:
+    /// a word form or a common word is right in one sentence and wrong in
+    /// the next, and a replacement everywhere spoils correct text.
+    pub fn applies_by_itself(&self) -> bool {
+        self.enabled && !self.hint_only && self.right.chars().any(|c| c.is_uppercase() || c.is_ascii_digit()) && !ending_only(&self.wrong, &self.right)
+    }
+}
+
+/// Words of the lines the secretary has checked, in every meeting (lower
+/// case, see `crate::quality::score::norm`); None until read from the
+/// database
+static CHECKED_WORDS: RwLock<Option<HashSet<String>>> = RwLock::new(None);
+
+pub fn set_checked_words(words: HashSet<String>) {
+    if let Ok(mut w) = CHECKED_WORDS.write() {
+        *w = Some(words);
+    }
+}
+
+/// The wrong form of a one-word rule is a word the secretary herself left
+/// in checked text: there it was right, so the rule cannot know where it is
+/// wrong. Measured on her 13 meetings (16.1% mistakes without rules): names
+/// and abbreviations never left so, 15.7%; all names and abbreviations fix
+/// about as many words as they spoil.
+fn left_as_right(wrong: &str, checked: &HashSet<String>) -> bool {
+    !wrong.contains(char::is_whitespace) && checked.contains(&crate::quality::score::norm(wrong))
+}
+
+/// A rule changes words by itself now: a name or an abbreviation
+/// (`Correction::applies_by_itself`) whose wrong form the secretary never
+/// left in checked text. Until the checked text is read, no rule does.
+fn applies_now(c: &Correction) -> bool {
+    c.applies_by_itself() && CHECKED_WORDS.read().ok().and_then(|w| w.as_ref().map(|set| !left_as_right(&c.wrong, set))).unwrap_or(false)
+}
+
+/// Whether «wrong» → «right» changes words by itself: as the saved rule
+/// says (it may have been undone), or, for a rule not saved, by its kind
+pub fn applies_by_itself_now(wrong: &str, right: &str) -> bool {
+    let saved = all_corrections().into_iter().find(|c| c.wrong.to_lowercase() == wrong.to_lowercase() && c.right == right);
+    applies_now(&saved.unwrap_or(Correction { wrong: wrong.into(), right: right.into(), enabled: true, hint_only: false }))
+}
+
+/// The same words in other grammatical forms («роти» → «роті», «Гончаренка»
+/// → «Гончаренко»); a change of case alone («прат» → «ПрАТ») is not one
+pub(crate) fn ending_only(wrong: &str, right: &str) -> bool {
+    let w: Vec<String> = wrong.split_whitespace().map(str::to_lowercase).collect();
+    let r: Vec<String> = right.split_whitespace().map(str::to_lowercase).collect();
+    w.len() == r.len() && w != r && w.iter().zip(&r).all(|(a, b)| a == b || same_word_forms(a, b))
+}
+
+/// All saved corrections («wrong => right»; «!» in front: switched off,
+/// then «?»: only offered)
 pub fn all_corrections() -> Vec<Correction> {
     read_lines(CORRECTIONS_FILE)
         .into_iter()
@@ -60,28 +120,70 @@ pub fn all_corrections() -> Vec<Correction> {
                 Some(rest) => (true, rest.to_string()),
                 None => (false, l),
             };
-            l.split_once("=>").map(|(a, b)| Correction { wrong: a.trim().to_string(), right: b.trim().to_string(), enabled: !off })
+            let (hint, l) = match l.strip_prefix('?') {
+                Some(rest) => (true, rest.to_string()),
+                None => (false, l),
+            };
+            l.split_once("=>").map(|(a, b)| Correction { wrong: a.trim().to_string(), right: b.trim().to_string(), enabled: !off, hint_only: hint })
         })
         .filter(|c| !c.wrong.is_empty() && !c.right.is_empty() && c.wrong != c.right)
         .collect()
 }
 
-/// Corrections in use «wrong => right»
+/// Corrections applied on their own after recognition «wrong => right»
+/// (see `applies_now`)
 pub fn corrections() -> Vec<(String, String)> {
+    all_corrections().into_iter().filter(applies_now).map(|c| (c.wrong, c.right)).collect()
+}
+
+/// All corrections in use, applied or only offered
+pub fn enabled_corrections() -> Vec<(String, String)> {
     all_corrections().into_iter().filter(|c| c.enabled).map(|c| (c.wrong, c.right)).collect()
 }
 
+/// Recognised words (lower case) that a correction only offers to change:
+/// they are underlined for the secretary to check
+pub fn hint_words() -> HashSet<String> {
+    all_corrections()
+        .into_iter()
+        .filter(|c| c.enabled && !applies_now(c) && !c.wrong.contains(char::is_whitespace))
+        .map(|c| c.wrong.to_lowercase())
+        .collect()
+}
+
 fn save_all(all: &[Correction]) -> Result<(), String> {
-    let lines: Vec<String> = all.iter().map(|c| format!("{}{} => {}", if c.enabled { "" } else { "!" }, c.wrong, c.right)).collect();
+    let lines: Vec<String> = all
+        .iter()
+        .map(|c| format!("{}{}{} => {}", if c.enabled { "" } else { "!" }, if c.hint_only { "?" } else { "" }, c.wrong, c.right))
+        .collect();
     write_lines(CORRECTIONS_FILE, &lines)
+}
+
+/// The rule an edit undoes: the secretary put back what was recognised
+/// where a correction had changed it («wrong» → «right» undone as «right»
+/// → «wrong»)
+pub fn undone_rule(wrong: &str, right: &str) -> Option<String> {
+    let (w, r) = (wrong.to_lowercase(), right.to_lowercase());
+    all_corrections().into_iter().find(|c| c.enabled && c.right.to_lowercase() == w && c.wrong.to_lowercase() == r).map(|c| c.wrong)
+}
+
+/// A rule the secretary undid is from now on only offered
+pub fn set_hint_only(wrong: &str) -> Result<(), String> {
+    let mut all = all_corrections();
+    for c in all.iter_mut().filter(|c| c.wrong == wrong) {
+        c.hint_only = true;
+    }
+    save_all(&all)
 }
 
 pub(crate) fn add_corrections(pairs: &[(String, String)]) -> Result<(), String> {
     let mut all = all_corrections();
     for (wrong, right) in pairs {
+        // A rule once undone stays only offered when it is confirmed again
+        let undone = all.iter().any(|c| c.hint_only && c.wrong.to_lowercase() == wrong.to_lowercase() && c.right == *right);
         all.retain(|c| c.wrong.to_lowercase() != wrong.to_lowercase());
         if wrong != right {
-            all.push(Correction { wrong: wrong.clone(), right: right.clone(), enabled: true });
+            all.push(Correction { wrong: wrong.clone(), right: right.clone(), enabled: true, hint_only: undone });
         }
     }
     save_all(&all)
@@ -427,6 +529,42 @@ pub fn dismissed() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_names_and_abbreviations_are_replaced_by_themselves() {
+        let rule = |w: &str, r: &str| Correction { wrong: w.into(), right: r.into(), enabled: true, hint_only: false };
+        // A misheard name, an abbreviation, a nickname with a number: replaced
+        assert!(rule("Кончаренко", "Гончаренко").applies_by_itself());
+        assert!(rule("прат", "ПрАТ").applies_by_itself());
+        assert!(rule("вузол два", "Вузол-2").applies_by_itself());
+        // Another ending of the same word, a common word: only offered
+        assert!(!rule("роти", "роті").applies_by_itself());
+        assert!(!rule("Гончаренка", "Гончаренко").applies_by_itself());
+        assert!(!rule("репеті", "репетиція").applies_by_itself());
+        assert!(!rule("оперативний черговий", "оперативного чергового").applies_by_itself());
+        // Undone once, or switched off: never by itself
+        assert!(!Correction { hint_only: true, ..rule("Кончаренко", "Гончаренко") }.applies_by_itself());
+        assert!(!Correction { enabled: false, ..rule("Кончаренко", "Гончаренко") }.applies_by_itself());
+    }
+
+    #[test]
+    fn a_word_left_as_right_in_checked_text_is_not_replaced_by_itself() {
+        let checked: HashSet<String> = ["сокіл", "доповідає", "прат"].iter().map(|w| w.to_string()).collect();
+        // A nickname spelled like a common word the secretary leaves as it is
+        assert!(left_as_right("сокіл", &checked));
+        assert!(left_as_right("Прат,", &checked));
+        assert!(!left_as_right("Кончаренко", &checked));
+        // A phrase is never «left as right» as a whole
+        assert!(!left_as_right("сокіл два", &checked));
+    }
+
+    #[test]
+    fn a_change_of_case_is_not_another_ending() {
+        assert!(!ending_only("прат", "ПрАТ"));
+        assert!(ending_only("роти", "роті"));
+        assert!(!ending_only("Кончаренко", "Гончаренко"));
+        assert!(!ending_only("робоч а", "робоча"));
+    }
 
     #[test]
     fn speaker_names_stay_as_in_the_transcript() {

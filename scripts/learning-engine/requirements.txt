@@ -1,0 +1,4 @@
+# The trainer's only dependencies (Apple Silicon, Python 3.11+)
+mlx==0.32.4
+numpy>=1.26,<3
+tiktoken>=0.7,<1

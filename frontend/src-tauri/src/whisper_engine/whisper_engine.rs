@@ -33,6 +33,9 @@ pub struct ModelInfo {
     pub speed: String,
     pub status: ModelStatus,
     pub description: String,
+    /// The file is this organisation's fine-tuned copy (`config::tuned_model_file`)
+    #[serde(default)]
+    pub tuned: bool,
 }
 
 struct ActiveDownload {
@@ -68,6 +71,13 @@ const CANCEL_DOWNLOAD_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// Download progress: percent, bytes downloaded, total bytes (0 if the server sends no Content-Length).
 pub type DownloadProgressCallback = Box<dyn Fn(u8, u64, u64) + Send>;
 
+tokio::task_local! {
+    /// Dictionary terms to put first in the prompt while a piece is
+    /// recognised inside [`PROMPT_TERMS`]`.scope(…)` (the terms this piece
+    /// seems to hold); the rest of the dictionary follows as usual
+    pub static PROMPT_TERMS: Vec<String>;
+}
+
 /// The Ukrainian initial prompt, with as many dictionary terms as fit in
 /// Whisper's prompt window, counted in the model's own tokens
 fn initial_prompt_for(ctx: &WhisperContext, language: Option<&str>) -> Option<String> {
@@ -75,9 +85,15 @@ fn initial_prompt_for(ctx: &WhisperContext, language: Option<&str>) -> Option<St
     static LOGGED_TOKENS: AtomicUsize = AtomicUsize::new(0);
     let max = crate::ukrainian::MAX_WHISPER_PROMPT_TOKENS;
     let count = |p: &str| ctx.tokenize(p, 2 * max).map(|t| t.len()).ok();
+    let mut terms = PROMPT_TERMS.try_with(|t| t.clone()).unwrap_or_default();
+    for t in crate::ukrainian::glossary_terms() {
+        if !terms.contains(&t) {
+            terms.push(t);
+        }
+    }
     let prompt = crate::ukrainian::whisper_initial_prompt_fitting(
         language,
-        &crate::ukrainian::glossary_terms(),
+        &terms,
         |p| count(p).is_some_and(|n| n <= max),
     )?;
     let tokens = count(&prompt).unwrap_or(0);
@@ -101,6 +117,8 @@ pub struct WhisperEngine {
     models_dir: PathBuf,
     current_context: Arc<RwLock<Option<WhisperContext>>>,
     current_model: Arc<RwLock<Option<String>>>,
+    /// The underline bars of the model loaded (a fine-tuned one has its own)
+    bars: Arc<RwLock<crate::ukrainian::doubt::Thresholds>>,
     available_models: Arc<RwLock<HashMap<String, ModelInfo>>>,
     // State tracking for smart logging
     last_transcription_was_short: Arc<RwLock<bool>>,
@@ -217,6 +235,7 @@ impl WhisperEngine {
             models_dir,
             current_context: Arc::new(RwLock::new(None)),
             current_model: Arc::new(RwLock::new(None)),
+            bars: Arc::new(RwLock::new(crate::ukrainian::doubt::Thresholds::DEFAULT)),
             available_models: Arc::new(RwLock::new(HashMap::new())),
             // Initialize state tracking
             last_transcription_was_short: Arc::new(RwLock::new(false)),
@@ -246,7 +265,9 @@ impl WhisperEngine {
         let model_configs = WHISPER_MODEL_CATALOG;
 
         for &(name, filename, size_mb, accuracy, speed, description) in model_configs {
-            let model_path = models_dir.join(filename);
+            let tuned_path = crate::config::tuned_model_file(models_dir, filename);
+            let tuned = tuned_path.is_some();
+            let model_path = tuned_path.unwrap_or_else(|| models_dir.join(filename));
             let status = if model_path.exists() {
                 // Check if file size is reasonable (at least 1MB for a valid model)
                 match std::fs::metadata(&model_path) {
@@ -293,6 +314,7 @@ impl WhisperEngine {
                 speed: speed.to_string(),
                 status,
                 description: description.to_string(),
+                tuned,
             };
             
             models.push(model_info);
@@ -344,7 +366,7 @@ impl WhisperEngine {
                     self.unload_model().await;
                 }
 
-                log::info!("Loading model: {}", model_name);
+                log::info!("Loading model: {}{}", model_name, if model_info.tuned { " (fine-tuned on this organisation's meetings)" } else { "" });
 
                 // PERFORMANCE OPTIMIZATION: Use comprehensive hardware profile for optimal GPU configuration
                 let hardware_profile = crate::audio::HardwareProfile::detect();
@@ -385,6 +407,11 @@ impl WhisperEngine {
                 // Update current context and model
                 *self.current_context.write().await = Some(ctx);
                 *self.current_model.write().await = Some(model_name.to_string());
+                *self.bars.write().await = if model_info.tuned {
+                    crate::learning::versions::bars_beside(&model_info.path)
+                } else {
+                    crate::ukrainian::doubt::Thresholds::DEFAULT
+                };
 
                 // Enhanced acceleration status reporting
                 let acceleration_status = acceleration.status_label();
@@ -424,6 +451,29 @@ impl WhisperEngine {
 
     pub async fn get_current_model(&self) -> Option<String> {
         self.current_model.read().await.clone()
+    }
+
+    /// Below what confidence a word the loaded model heard is underlined
+    pub async fn bars(&self) -> crate::ukrainian::doubt::Thresholds {
+        *self.bars.read().await
+    }
+
+    /// Loads the model in use again from disk, after the fine-tuned version
+    /// for it changed (`learning`). The old one keeps working until the new
+    /// one is loaded, so recognition is never left without a model.
+    pub async fn reload_model(&self) -> Result<()> {
+        let Some(name) = self.get_current_model().await else {
+            self.discover_models().await?;
+            return Ok(());
+        };
+        self.discover_models().await?;
+        // `load_model` skips the model that is loaded already
+        *self.current_model.write().await = None;
+        let result = self.load_model(&name).await;
+        if result.is_err() {
+            *self.current_model.write().await = Some(name);
+        }
+        result
     }
     
     pub async fn is_model_loaded(&self) -> bool {
@@ -600,6 +650,15 @@ impl WhisperEngine {
     pub async fn transcribe_audio_with_word_probs(&self, audio_data: Vec<f32>, language: Option<String>, beam: Option<i32>) -> Result<(String, Vec<(String, f64)>, Vec<f32>)> {
         let (text, _, _, words, probs) = self.transcribe_audio_inner(audio_data, language, true, beam).await?;
         Ok((text, words, probs))
+    }
+
+    /// The initial prompt the loaded model gets for `language` with the
+    /// current glossary, as `transcribe_audio_inner` builds it (for teaching
+    /// a fine-tuned model under the same conditions)
+    pub async fn initial_prompt(&self, language: Option<&str>) -> Option<String> {
+        let ctx_lock = self.current_context.read().await;
+        let prompt = initial_prompt_for(ctx_lock.as_ref()?, language);
+        prompt
     }
 
     async fn transcribe_audio_inner(&self, audio_data: Vec<f32>, language: Option<String>, want_words: bool, beam: Option<i32>) -> Result<(String, f32, bool, Vec<(String, f64)>, Vec<f32>)> {
@@ -1416,6 +1475,7 @@ mod tests {
                 speed: "Fast".to_string(),
                 status: ModelStatus::Downloading { progress: 42 },
                 description: "test model".to_string(),
+                tuned: false,
             },
         );
 

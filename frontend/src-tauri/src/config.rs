@@ -24,6 +24,16 @@ pub const WHISPER_MODEL_CATALOG: &[(&str, &str, u32, &str, &str, &str)] = &[
     ("large-v3-turbo-q8_0", "ggml-large-v3-turbo-q8_0.bin", 834, "Medium", "Fast", "Швидша й менша, але може пропускати цілі фрази"),
 ];
 
+/// A model fine-tuned on this organisation's own checked meetings, used in
+/// place of the original: the version in use from `learning::versions`
+/// (trained on this Mac), or without one the file put by hand next to the
+/// original as `ggml-large-v3-tuned.bin` (scripts/finetune). It heard real
+/// meetings, so it is never downloaded, published or sent anywhere; deleting
+/// it in Settings brings the original back.
+pub fn tuned_model_file(models_dir: &std::path::Path, filename: &str) -> Option<std::path::PathBuf> {
+    crate::learning::versions::model_file(models_dir, filename)
+}
+
 /// Whisper models this app supports; a saved model outside this list is migrated to the default.
 pub fn is_supported_whisper_model(name: &str) -> bool {
     WHISPER_MODEL_CATALOG.iter().any(|(model, ..)| *model == name)

@@ -563,6 +563,19 @@ impl ParakeetEngine {
         Ok(result.text)
     }
 
+    /// Words of a piece with their time (s from the start of the audio) and
+    /// how sure the model was of each (its least sure token, 0..1)
+    pub async fn transcribe_words(&self, audio_data: Vec<f32>) -> Result<Vec<(String, f64, f32)>> {
+        let mut model_guard = self.current_model.write().await;
+        let model = model_guard
+            .as_mut()
+            .ok_or_else(|| anyhow!("No Parakeet model loaded. Please load a model first."))?;
+        let result = model
+            .transcribe_samples(audio_data)
+            .map_err(|e| anyhow!("Parakeet transcription failed: {}", e))?;
+        Ok(super::model::words_of(&result))
+    }
+
     /// Get the models directory path
     pub async fn get_models_directory(&self) -> PathBuf {
         self.models_dir.clone()

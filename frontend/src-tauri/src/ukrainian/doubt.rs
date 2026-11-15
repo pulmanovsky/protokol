@@ -16,6 +16,16 @@ pub const DOUBTFUL_P: f32 = 0.85;
 pub const DOUBTFUL_P_SPECIAL: f32 = 0.95;
 /// How alike two spellings must sound to replace one with the other
 pub const SNAP_SIMILARITY: f64 = 0.8;
+/// A word a learned correction only offers to change is underlined when
+/// recognition was less than fully sure of it (a word checked by hand is
+/// sure, 1.0)
+pub const HINT_P: f32 = 0.99;
+
+/// Whether a recognised word is one a learned correction offers to change
+/// (`hint_words`, lower case) and recognition was not fully sure of it
+pub fn hinted(word: &str, probability: f32, hint_words: &std::collections::HashSet<String>) -> bool {
+    probability < HINT_P && !hint_words.is_empty() && hint_words.contains(&bare(word).to_lowercase())
+}
 
 fn bare(w: &str) -> &str {
     w.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’' && c != '-')
@@ -25,23 +35,57 @@ fn has_digit(w: &str) -> bool {
     w.chars().any(|c| c.is_ascii_digit())
 }
 
-/// Which words of a piece are doubtful. `known` says whether a word is in
-/// the dictionary (or a confirmed name/role).
-pub fn doubtful(words: &[String], probs: &[f32], known: &dyn Fn(&str) -> bool) -> Vec<bool> {
-    let mut out = Vec::with_capacity(words.len());
-    for (i, w) in words.iter().enumerate() {
-        let p = probs.get(i).copied().unwrap_or(1.0);
-        let word = bare(w);
-        if word.is_empty() {
-            out.push(false);
-            continue;
-        }
-        let sentence_start = i == 0 || words[i - 1].ends_with(['.', '!', '?', '…']);
-        let name_like = !sentence_start && word.chars().next().is_some_and(char::is_uppercase) && !known(word);
-        let special = has_digit(word) || name_like;
-        out.push(p < DOUBTFUL_P || (special && p < DOUBTFUL_P_SPECIAL));
+/// The bars below which a word is doubtful. A fine-tuned model is sure of
+/// words in its own way, so each one gets bars of its own, chosen when it is
+/// checked (`learning::measure::tune`) and kept with it; the original model
+/// has the defaults. A piece keeps the bars of the model that heard it
+/// (`speakers::words::PieceWords::bars`).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Thresholds {
+    pub normal: f32,
+    /// Numbers and names outside the dictionary
+    pub special: f32,
+}
+
+impl Thresholds {
+    pub const DEFAULT: Thresholds = Thresholds { normal: DOUBTFUL_P, special: DOUBTFUL_P_SPECIAL };
+
+    /// The bar for names and numbers stays as far above the normal one as by default
+    pub fn from_normal(normal: f32) -> Self {
+        Thresholds { normal, special: (normal + DOUBTFUL_P_SPECIAL - DOUBTFUL_P).min(0.99) }
     }
-    out
+}
+
+/// Which words are held to the higher bar: numbers, and capitalised words in
+/// the middle of a sentence that are not in the dictionary (names, nicknames)
+pub fn special_words(words: &[String], known: &dyn Fn(&str) -> bool) -> Vec<bool> {
+    words
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            let word = bare(w);
+            let sentence_start = i == 0 || words[i - 1].ends_with(['.', '!', '?', '…']);
+            let name_like = !sentence_start && word.chars().next().is_some_and(char::is_uppercase) && !known(word);
+            !word.is_empty() && (has_digit(word) || name_like)
+        })
+        .collect()
+}
+
+/// Whether one word is doubtful under the bars `t`
+pub fn below(word: &str, probability: f32, special: bool, t: Thresholds) -> bool {
+    !bare(word).is_empty() && (probability < t.normal || (special && probability < t.special))
+}
+
+/// Which words of a piece the original model heard are doubtful. `known`
+/// says whether a word is in the dictionary (or a confirmed name/role).
+pub fn doubtful(words: &[String], probs: &[f32], known: &dyn Fn(&str) -> bool) -> Vec<bool> {
+    doubtful_with(words, probs, known, Thresholds::DEFAULT)
+}
+
+/// The same under the bars of the model that heard the piece
+pub fn doubtful_with(words: &[String], probs: &[f32], known: &dyn Fn(&str) -> bool, t: Thresholds) -> Vec<bool> {
+    let special = special_words(words, known);
+    words.iter().enumerate().map(|(i, w)| below(w, probs.get(i).copied().unwrap_or(1.0), special[i], t)).collect()
 }
 
 /// A rough sound of a word: lower case, Latin letters read as Ukrainian,
@@ -206,6 +250,8 @@ mod tests {
         let known = |w: &str| w == "Гончаренко";
         // A name outside the dictionary, an unsure plain word, an unsure number
         assert_eq!(doubtful(&words, &probs, &known), vec![false, true, true, true, false]);
+        // A model with lower bars of its own (0.4, names and numbers 0.5): only the very unsure word
+        assert_eq!(doubtful_with(&words, &probs, &known, Thresholds::from_normal(0.4)), vec![false, false, true, false, false]);
         // A known name at 0.9 is fine; an unknown one is held to a higher bar
         let words = s(&["слово", "має", "Гончаренко."]);
         assert_eq!(doubtful(&words, &[0.99, 0.99, 0.9], &known), vec![false, false, false]);

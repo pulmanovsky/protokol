@@ -7,6 +7,7 @@ import { RefreshCw } from 'lucide-react';
 import { toast } from '@/lib/notice';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { CalendarEvent, PENDING_MEETING_TITLE_KEY, formatTime } from '@/components/CalendarReminder';
+import { isMeetUrl, openCallLink, watchCalendarEnd } from '@/lib/meet';
 
 interface CalendarStatus {
   settings: { enabled: boolean; ics_url: string | null };
@@ -85,9 +86,18 @@ export default function CalendarPage() {
     });
   }, [status, now]);
 
+  // A meeting without a call link (in the room): recorded by this press; once
+  // its time is over, the offer to end the recording appears
   const record = (event: CalendarEvent) => {
     sessionStorage.setItem(PENDING_MEETING_TITLE_KEY, event.title);
     handleRecordingToggle();
+    watchCalendarEnd(event.title, event.end);
+  };
+
+  // A call is only joined: Google Meet in Protokol's window, others in their
+  // own app; the recording is offered then and starts only when pressed
+  const join = (event: CalendarEvent) => {
+    openCallLink(event.meeting_url!, event.title, event.end).catch((error) => toast.error(`${error}`));
   };
 
   return (
@@ -115,7 +125,7 @@ export default function CalendarPage() {
           <section className="card px-6 py-12 flex flex-col items-center gap-3 text-center">
             <h2 className="text-lg font-bold text-gray-900">Календар не підключено</h2>
             <p className="text-sm text-[color:var(--muted-text)] max-w-md">
-              Додайте посилання на календар (iCal) або файл .ics, і тут з’являться ваші зустрічі з кнопкою для запису.
+              Додайте посилання на календар (iCal) або файл .ics, і тут з’являться ваші зустрічі з кнопкою, щоб приєднатися до дзвінка або записати.
             </p>
             <Link href="/settings?section=calendar" className="accent-button h-11 px-5 text-[15px] font-semibold mt-2">
               Налаштувати календар
@@ -145,6 +155,10 @@ export default function CalendarPage() {
                           </span>
                           {past ? (
                             <span className="text-[13px] text-[color:var(--muted-text)]">Минула</span>
+                          ) : event.meeting_url ? (
+                            <button type="button" onClick={() => join(event)} className="secondary-button h-9 px-3.5 text-[13px] font-semibold">
+                              {isMeetUrl(event.meeting_url) ? 'Приєднатися в Протоколі' : 'Відкрити дзвінок'}
+                            </button>
                           ) : (
                             <button type="button" onClick={() => record(event)} className="secondary-button h-9 px-3.5 gap-2 text-[13px] font-semibold">
                               <span className="w-2 h-2 rounded-full record-dot" aria-hidden="true" />

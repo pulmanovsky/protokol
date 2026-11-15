@@ -50,6 +50,18 @@ function needsReview(word: string, probability: number): boolean {
 /** The history's name for «Залишити як є» (WORD_KEPT in journal.rs) */
 const WORD_KEPT = 'слово підтверджено';
 
+/**
+ * What a remembered word rule does next time: a name or an abbreviation is
+ * fixed by itself, any other word is only underlined with its variant
+ */
+function learnedNext(items: { kind: string; auto?: boolean }[]): string {
+  const words = items.filter((l) => l.kind === 'word');
+  const auto = words.filter((l) => l.auto !== false).length;
+  if (auto === words.length) return words.length > 1 ? 'Наступного разу виправляться автоматично' : 'Наступного разу виправиться автоматично';
+  if (auto === 0) return words.length > 1 ? 'У нових записах ці слова буде підкреслено з варіантом виправлення' : 'У нових записах це слово буде підкреслено з варіантом виправлення';
+  return 'Імена та скорочення виправлятимуться автоматично, інші слова буде підкреслено з варіантом виправлення';
+}
+
 /** A word without the punctuation around it («репеті,» → «репеті») */
 function bareWord(w: string): string {
   return w.replace(/^[^\p{L}\p{N}'’-]+|[^\p{L}\p{N}'’-]+$/gu, '');
@@ -563,14 +575,6 @@ export function TranscriptWorkspace({
     window.dispatchEvent(new CustomEvent('protokol:review-changed'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progress]);
-  const doubtMap = useMemo(() => {
-    const m = new Map<string, Set<number>>();
-    for (const d of doubts) {
-      if (!m.has(d.segmentId)) m.set(d.segmentId, new Set());
-      m.get(d.segmentId)!.add(d.wordIndex);
-    }
-    return m;
-  }, [doubts]);
   // «Можливо, X?» hints dismissed by the user (kept for this meeting)
   const dismissedKey = `protokol.maybe.dismissed.${meetingId}`;
   const [dismissed, setDismissed] = useState<Set<string>>(() => {
@@ -654,6 +658,23 @@ export function TranscriptWorkspace({
   }, []);
   const readIdsRef = useRef(readIds);
   readIdsRef.current = readIds;
+  // Unsure words of a line the secretary has read (or checked) are settled:
+  // they were underlined in front of them while reading, so there is no
+  // second pass over them. A word opened in the strip stays until it is closed.
+  const [openDoubt, setOpenDoubt] = useState<string | null>(null);
+  const openDoubts = useMemo(() => {
+    const settled = new Set<string>(readIds);
+    for (const r of rows) if (r.reviewed) settled.add(r.id);
+    return doubts.filter((d) => !settled.has(d.segmentId) || `w:${d.segmentId}:${d.wordIndex}` === openDoubt);
+  }, [doubts, rows, readIds, openDoubt]);
+  const doubtMap = useMemo(() => {
+    const m = new Map<string, Set<number>>();
+    for (const d of openDoubts) {
+      if (!m.has(d.segmentId)) m.set(d.segmentId, new Set());
+      m.get(d.segmentId)!.add(d.wordIndex);
+    }
+    return m;
+  }, [openDoubts]);
   useEffect(() => {
     const timer = window.setInterval(() => {
       const surface = surfaceRef.current;
@@ -943,7 +964,7 @@ export function TranscriptWorkspace({
   const queue: QueueItem[] = useMemo(() => {
     const items: QueueItem[] = [];
     const seen = new Set<string>();
-    for (const d of doubts) if (rowIndex.has(d.segmentId) && needsReview(d.word, d.probability) && !seen.has(`${d.segmentId}:${d.wordIndex}`) && seen.add(`${d.segmentId}:${d.wordIndex}`)) items.push({ key: `w:${d.segmentId}:${d.wordIndex}`, kind: 'word', rowId: d.segmentId, seconds: d.seconds, doubt: d });
+    for (const d of openDoubts) if (rowIndex.has(d.segmentId) && needsReview(d.word, d.probability) && !seen.has(`${d.segmentId}:${d.wordIndex}`) && seen.add(`${d.segmentId}:${d.wordIndex}`)) items.push({ key: `w:${d.segmentId}:${d.wordIndex}`, kind: 'word', rowId: d.segmentId, seconds: d.seconds, doubt: d });
     // A whole line in the queue only when clearly someone else's; less clear ones are a quiet hint on the line
     for (const v of voices) if (rowIndex.has(v.segment_id) && (!v.whole || (v.margin ?? 0) >= 0.1)) items.push({ key: `v:${v.segment_id}`, kind: 'voice', rowId: v.segment_id, seconds: v.seconds, voice: v });
     const named = new Set<string>();
@@ -954,7 +975,7 @@ export function TranscriptWorkspace({
       }
     }
     return items.sort((a, b) => a.seconds - b.seconds);
-  }, [doubts, voices, rows, rowIndex]);
+  }, [openDoubts, voices, rows, rowIndex]);
   const [qi, setQi] = useState(-1);
   qiRef.current = qi;
   useEffect(() => {
@@ -968,6 +989,8 @@ export function TranscriptWorkspace({
   const stripInput = useRef<HTMLInputElement>(null);
   const stripRef = useRef(strip);
   stripRef.current = strip;
+  const stripWord = strip?.item.kind === 'word' ? strip.item.key : null;
+  useEffect(() => setOpenDoubt(stripWord), [stripWord]);
   const selectWords = (rowId: string, from: number, to: number): DOMRect | null => {
     const row = surfaceRef.current?.querySelector(`[data-row="${rowId}"]`);
     const a = row?.querySelector(`[data-w="${from}"]`);
@@ -1039,7 +1062,7 @@ export function TranscriptWorkspace({
 
   // «Додано в пам'ять»: what a fix here stored (a word rule, a voice), shown
   // for a few seconds with «Скасувати»; fixes in quick succession together
-  type Learned = { kind: string; from: string; to: string; count: number; meeting?: string };
+  type Learned = { kind: string; from: string; to: string; count: number; meeting?: string; auto?: boolean };
   const [learned, setLearned] = useState<Learned[]>([]);
   const learnedBatch = useRef<Learned[]>([]);
   const learnedTimer = useRef<number | null>(null);
@@ -1731,14 +1754,14 @@ export function TranscriptWorkspace({
                 <b>
                   Додано в пам&apos;ять: «{learned[0].from}» → «{learned[0].to}»
                 </b>
-                <span>{moreFixed > 0 ? `У цьому записі виправлено ще ${moreFixed} ${plural(moreFixed, 'рядок', 'рядки', 'рядків')}` : 'Наступного разу виправиться автоматично'}</span>
+                <span>{moreFixed > 0 ? `У цьому записі виправлено ще ${moreFixed} ${plural(moreFixed, 'рядок', 'рядки', 'рядків')}` : learnedNext(learned)}</span>
               </>
             ) : (
               <>
                 <b>
                   Додано в пам&apos;ять: {learned.length} {plural(learned.length, 'виправлення', 'виправлення', 'виправлень')}
                 </b>
-                <span>{moreFixed > 0 ? `У цьому записі виправлено ще ${moreFixed} ${plural(moreFixed, 'рядок', 'рядки', 'рядків')}` : 'Наступного разу виправляться автоматично'}</span>
+                <span>{moreFixed > 0 ? `У цьому записі виправлено ще ${moreFixed} ${plural(moreFixed, 'рядок', 'рядки', 'рядків')}` : learnedNext(learned)}</span>
               </>
             )}
           </span>

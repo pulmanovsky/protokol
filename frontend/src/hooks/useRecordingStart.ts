@@ -13,6 +13,7 @@ import {
   type ModelWithStatus,
 } from '@/lib/transcription-model-readiness';
 import { toast } from '@/lib/notice';
+import { takeAutoStart } from '@/lib/autoStart';
 
 const TRANSCRIPTION_RUNTIME_START_ERROR_CODE = 'TRANSCRIPTION_RUNTIME_INITIALIZATION_FAILED';
 const TRANSCRIPTION_RUNTIME_USER_MESSAGE = 'Не вдалося запустити розпізнавання мовлення. Перезапустіть Протокол. Якщо не допоможе, перевстановіть програму.';
@@ -216,11 +217,10 @@ export function useRecordingStart(
   useEffect(() => {
     const checkAutoStartRecording = async () => {
       if (typeof window !== 'undefined') {
-        const shouldAutoStart = sessionStorage.getItem('autoStartRecording');
-        if (shouldAutoStart === 'true' && !isRecording && !isAutoStarting) {
+        // Only a press of «Почати запис» in the last few seconds (lib/autoStart)
+        if (!isRecording && !isAutoStarting && takeAutoStart()) {
           console.log('Auto-starting recording from navigation...');
           setIsAutoStarting(true);
-          sessionStorage.removeItem('autoStartRecording'); // Clear the flag
 
           // Check the selected transcription model before starting.
           const modelReady = await checkModelReady();

@@ -28,10 +28,44 @@ export interface MeetLive {
   meetCam: boolean | null;
 }
 
-/** An offer to start or end the recording when a Meet call starts or ends */
+/** An offer to start or end the recording (meet/live.rs): a call in the
+ * Meet window starts or ends, a call link opened in its own app, or the
+ * calendar event's time is over. Nothing starts or stops by itself. */
 export interface MeetPrompt {
   kind: 'start' | 'stop';
   title: string | null;
+  source?: 'meet' | 'call' | 'calendar';
+  /** The service of a call opened in its own app («Zoom») */
+  service?: string | null;
+}
+
+/** «Google Meet», «Zoom», «Microsoft Teams» or the link's host */
+export function callService(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const host = new URL(url).hostname;
+    if (host.includes('meet.google')) return 'Google Meet';
+    if (host.includes('zoom')) return 'Zoom';
+    if (host.includes('teams')) return 'Microsoft Teams';
+    return host.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+}
+
+/** A calendar time as RFC 3339, or null */
+function isoOrNull(at: string | null | undefined): string | null {
+  if (!at) return null;
+  const d = new Date(at);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+/** A recording started by hand for a calendar event: once the event's time is
+ * over, the offer to end it appears (it never ends by itself) */
+export function watchCalendarEnd(title: string | null | undefined, end: string | null | undefined): void {
+  const endsAt = isoOrNull(end);
+  if (!endsAt) return;
+  invoke('call_watch_end', { title: title ?? null, endsAt }).catch(() => {});
 }
 
 /** How the last speaker recognition used the Meet window (speakers/meet.rs) */
@@ -111,12 +145,16 @@ export async function openMeet(url?: string | null, title?: string | null): Prom
 }
 
 /** A meeting link: a Google Meet link always opens in Protokol's Meet window,
- * never in a browser; other services (Zoom, Teams) open in their own app */
-export async function openCallLink(url: string, title?: string | null): Promise<void> {
+ * never in a browser; other services (Zoom, Teams) open in their own app,
+ * and then the offer to start the recording appears (nothing is recorded
+ * unless it is pressed). `end`: the calendar event's end, for the offer to
+ * end the recording then. */
+export async function openCallLink(url: string, title?: string | null, end?: string | null): Promise<void> {
   if (isMeetUrl(url)) {
     await openMeet(url, title);
   } else {
     await invoke('open_external_url', { url });
+    await invoke('call_opened', { title: title ?? null, service: callService(url), endsAt: isoOrNull(end) }).catch(() => {});
   }
 }
 

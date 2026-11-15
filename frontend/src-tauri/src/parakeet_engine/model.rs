@@ -25,6 +25,8 @@ pub struct TimestampedResult {
     pub text: String,
     pub timestamps: Vec<f32>,
     pub tokens: Vec<String>,
+    /// How sure the model was of each token (its softmax probability, 0..1)
+    pub probs: Vec<f32>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -337,9 +339,10 @@ impl ParakeetModel {
         // Decode for each batch item
         let mut results = Vec::new();
         for (encodings, &encodings_len) in encoder_out.outer_iter().zip(encoder_out_lens.iter()) {
-            let (tokens, timestamps) =
+            let (tokens, timestamps, probs) =
                 self.decode_sequence(&encodings.view(), encodings_len as usize)?;
-            let result = self.decode_tokens(tokens, timestamps);
+            let mut result = self.decode_tokens(tokens, timestamps);
+            result.probs = probs;
             results.push(result);
         }
 
@@ -350,10 +353,11 @@ impl ParakeetModel {
         &mut self,
         encodings: &ArrayViewD<f32>, // [time_steps, 1024]
         encodings_len: usize,
-    ) -> Result<(Vec<i32>, Vec<usize>), ParakeetError> {
+    ) -> Result<(Vec<i32>, Vec<usize>, Vec<f32>), ParakeetError> {
         let mut prev_state = self.create_decoder_state()?;
         let mut tokens = Vec::new();
         let mut timestamps = Vec::new();
+        let mut token_probs = Vec::new();
 
         let mut t = 0;
         let mut emitted_tokens = 0;
@@ -394,6 +398,7 @@ impl ParakeetModel {
                 prev_state = new_state;
                 tokens.push(token);
                 timestamps.push(t);
+                token_probs.push(softmax_at(vocab_logits, token as usize));
                 emitted_tokens += 1;
             }
 
@@ -433,7 +438,7 @@ impl ParakeetModel {
             );
         }
 
-        Ok((tokens, timestamps))
+        Ok((tokens, timestamps, token_probs))
     }
 
     fn decode_tokens(&self, ids: Vec<i32>, timestamps: Vec<usize>) -> TimestampedResult {
@@ -471,6 +476,7 @@ impl ParakeetModel {
             text,
             timestamps: float_timestamps,
             tokens,
+            probs: Vec::new(),
         }
     }
 
@@ -499,5 +505,62 @@ impl ParakeetModel {
         })?;
 
         Ok(timestamped_result)
+    }
+}
+
+/// Softmax probability of one entry of a logit vector
+fn softmax_at(logits: &[f32], index: usize) -> f32 {
+    let max = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let sum: f32 = logits.iter().map(|l| (l - max).exp()).sum();
+    logits.get(index).map(|l| (l - max).exp() / sum.max(f32::MIN_POSITIVE)).unwrap_or(0.0)
+}
+
+/// Words of a result: a token that starts with a space (the vocabulary's
+/// «▁», turned into a space on loading) begins a word; punctuation on its own
+/// stays with the word before. Each word with the time of its first token (s)
+/// and how sure the model was of it (its least sure token).
+pub fn words_of(result: &TimestampedResult) -> Vec<(String, f64, f32)> {
+    let mut out: Vec<(String, f64, f32)> = Vec::new();
+    for (i, token) in result.tokens.iter().enumerate() {
+        let p = result.probs.get(i).copied().unwrap_or(1.0);
+        let t = result.timestamps.get(i).copied().unwrap_or(0.0) as f64;
+        let piece = token.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{2581}');
+        let starts = piece.len() < token.len() && piece.chars().any(char::is_alphanumeric);
+        match out.last_mut() {
+            Some(last) if !starts => {
+                last.0.push_str(piece);
+                if piece.chars().any(char::is_alphanumeric) {
+                    last.2 = last.2.min(p);
+                }
+            }
+            _ => {
+                if !piece.is_empty() {
+                    out.push((piece.to_string(), t, p));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn words_of_starts_a_word_at_each_space() {
+        let tokens = [" Доб", "рий", " день", ",", " 3", "0", " хв", "ил", "ин", " ."];
+        let r = TimestampedResult {
+            text: String::new(),
+            timestamps: (0..tokens.len()).map(|i| i as f32 * 0.08).collect(),
+            tokens: tokens.iter().map(|t| t.to_string()).collect(),
+            probs: vec![0.9, 0.6, 0.95, 0.99, 0.9, 0.8, 0.9, 0.9, 0.7, 0.5],
+        };
+        let w = words_of(&r);
+        let text: Vec<&str> = w.iter().map(|x| x.0.as_str()).collect();
+        assert_eq!(text, vec!["Добрий", "день,", "30", "хвилин."]);
+        assert!((w[0].2 - 0.6).abs() < 1e-6);
+        assert!((w[3].2 - 0.7).abs() < 1e-6, "a lone full stop does not lower the word");
+        assert!((w[1].1 - 0.16).abs() < 1e-6);
     }
 }

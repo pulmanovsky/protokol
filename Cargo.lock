@@ -4884,10 +4884,11 @@ dependencies = [
 
 [[package]]
 name = "protokol"
-version = "0.3.23"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "block2",
  "bytemuck",
  "bytes",
@@ -4915,6 +4916,7 @@ dependencies = [
  "lazy_static",
  "log",
  "memory-stats",
+ "minisign-verify",
  "ndarray",
  "nnnoiseless",
  "objc",

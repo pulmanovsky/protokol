@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import type { SummaryProcessResponse } from '@/types';
+import { requestAutoStart } from '@/lib/autoStart';
 
 
 
@@ -217,7 +218,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       } else {
         // Not on home - navigate and use auto-start mechanism
         console.log('Navigating to home page with auto-start flag');
-        sessionStorage.setItem('autoStartRecording', 'true');
+        requestAutoStart();
         router.push('/');
       }
 

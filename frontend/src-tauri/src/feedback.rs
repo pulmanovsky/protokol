@@ -27,7 +27,7 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
 }
 
 /// «Mac mini (Apple M2)» and «16 GB» from system_profiler
-fn hardware() -> (String, String) {
+pub(crate) fn hardware() -> (String, String) {
     let Some(json) = run("system_profiler", &["-json", "SPHardwareDataType"]) else {
         return (run("sysctl", &["-n", "hw.model"]).unwrap_or_default(), String::new());
     };

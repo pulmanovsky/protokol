@@ -10,6 +10,7 @@ import { confirmNative } from '@/lib/confirm';
 import { plural } from '@/lib/plural';
 import { toast } from '@/lib/notice';
 import { formatBytes } from '@/components/settings/StorageSettings';
+import { LearningReport } from '@/components/learning/LearningReport';
 
 function Label({ title, sub }: { title: string; sub: string }) {
   return (
@@ -136,6 +137,8 @@ export function PrivacySettings() {
           </span>
         </SettingsRow>
       </SettingsGroup>
+
+      <LearningReport />
 
       <SettingsGroup title="Видалення">
         <SettingsRow

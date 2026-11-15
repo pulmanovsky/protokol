@@ -7,19 +7,25 @@ import { usePathname, useRouter } from 'next/navigation';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { PENDING_MEETING_TITLE_KEY } from '@/components/CalendarReminder';
 import type { MeetPrompt as Prompt } from '@/lib/meet';
+import { requestAutoStart } from '@/lib/autoStart';
 
-/** The texts of the offer, shared by this dialog and the corner panel */
+/** The texts of the offer in the main window */
 export function promptTexts(prompt: Prompt): { title: string; body: string; yes: string; no: string } {
   if (prompt.kind === 'start') {
     return {
-      title: 'Протокол',
-      body: 'Нарада в Google Meet почалась, а запис не йде.',
+      title:
+        prompt.source === 'call'
+          ? prompt.service
+            ? `Дзвінок у ${prompt.service} відкрито`
+            : 'Дзвінок відкрито'
+          : 'Нарада в Google Meet почалась',
+      body: 'Запис не йде. Почати запис?',
       yes: 'Почати запис',
       no: 'Не цього разу',
     };
   }
   return {
-    title: 'Нарада в Google Meet завершилась',
+    title: prompt.source === 'calendar' ? 'Час наради за календарем минув' : 'Нарада в Google Meet завершилась',
     body: prompt.title ? `Завершити запис «${prompt.title}»? Обробка почнеться одразу.` : 'Завершити запис? Обробка почнеться одразу.',
     yes: 'Завершити запис',
     no: 'Продовжити запис',
@@ -32,8 +38,9 @@ export function answerPrompt(answer: 'start' | 'stop' | 'no') {
 
 /**
  * In the main window: the offer to start recording when a call in the Meet
- * window starts unrecorded, or to end the recording when the call ends.
- * Nothing starts or stops unless a button is pressed. Also starts the
+ * window starts unrecorded or a call link was opened in its own app, and to
+ * end the recording when the Meet call ends or the calendar event's time is
+ * over. Nothing starts or stops unless a button is pressed. Also starts the
  * recording when «Почати запис» is pressed in the corner panel.
  */
 export function MeetPrompt() {
@@ -67,7 +74,7 @@ export function MeetPrompt() {
       if (pathname === '/') {
         window.dispatchEvent(new CustomEvent('start-recording-from-sidebar'));
       } else {
-        sessionStorage.setItem('autoStartRecording', 'true');
+        requestAutoStart();
         router.push('/');
       }
     });
@@ -84,10 +91,8 @@ export function MeetPrompt() {
     <Dialog open onOpenChange={(open) => !open && answerPrompt('no')}>
       <DialogContent className="max-w-[420px] gap-3 rounded-[24px] p-[18px] pb-4">
         <DialogHeader className="text-left space-y-1 pr-6">
-          <DialogTitle className="text-[16px] font-bold text-gray-900">{prompt.kind === 'start' ? 'Нарада в Google Meet почалась' : t.title}</DialogTitle>
-          <DialogDescription className="text-[13.5px] leading-[1.45] text-gray-700">
-            {prompt.kind === 'start' ? 'Запис не йде. Почати запис?' : t.body}
-          </DialogDescription>
+          <DialogTitle className="text-[16px] font-bold text-gray-900">{t.title}</DialogTitle>
+          <DialogDescription className="text-[13.5px] leading-[1.45] text-gray-700">{t.body}</DialogDescription>
         </DialogHeader>
         <div className="flex justify-end gap-2">
           <button type="button" onClick={() => answerPrompt('no')} className="sheet-btn">

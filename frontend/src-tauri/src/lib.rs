@@ -63,6 +63,8 @@ pub mod whisper_engine;
 pub mod power;
 pub mod island;
 pub mod meet;
+pub mod quality;
+pub mod learning;
 pub mod settings_extra;
 
 #[cfg(test)]
@@ -438,6 +440,10 @@ pub fn run() {
         .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
         .setup(|_app| {
             learned_events::init(_app.handle());
+            // Words the secretary left as right in checked lines: a rule for such a word is only offered
+            ukrainian::commands::start_checked_words_loop(_app.handle().clone());
+            // Recognition that learns on this Mac: a run at night when it is time
+            learning::commands::start_loop(_app.handle().clone());
             // The recordings folder chosen in Settings, for the recorder and the import
             {
                 let handle = _app.handle().clone();
@@ -655,6 +661,21 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            learning::commands::api_learning_status,
+            learning::commands::api_learning_set_mode,
+            learning::commands::api_learning_start_now,
+            learning::commands::api_learning_stop,
+            learning::commands::api_learning_use,
+            learning::commands::api_learning_report,
+            learning::commands::api_learning_report_sent,
+            learning::commands::api_learning_reports_sent,
+            learning::commands::api_learning_report_save,
+            learning::commands::api_learning_offer_later,
+            learning::commands::api_learning_seen,
+            learning::commands::api_learning_quality,
+            learning::engine::api_learning_engine_download,
+            learning::engine::api_learning_engine_install_file,
+            learning::engine::api_learning_engine_choose_file,
             learned_events::api_learned_summary,
             learned_events::api_auto_fixes,
             learned_events::api_learned_rules,
@@ -789,6 +810,8 @@ pub fn run() {
             meet::get_meet_status,
             meet::live::meet_prompt_current,
             meet::live::meet_prompt_answer,
+            meet::live::call_opened,
+            meet::live::call_watch_end,
             meet::live::get_meet_live,
             meet::live::meet_show,
             speakers::meet_names::get_meet_accounts,

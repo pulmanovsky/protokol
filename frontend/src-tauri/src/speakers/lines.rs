@@ -937,6 +937,7 @@ mod tests {
             auto: vec![],
             aligned: true,
             heard: vec![(8.1, 10.0), (8.6, 10.6), (11.2, 13.0), (11.6, 13.5)],
+            bars: None,
         }];
         let (exact, w) = words_of_line(&pieces, "Склад готовий", 13.0, 16.0);
         assert!(exact);
@@ -956,7 +957,7 @@ mod tests {
             end: 14.0,
             words: vec![("Добрий".into(), 10.0), ("день.".into(), 10.6), ("Склад".into(), 12.0), ("готовий".into(), 12.5)],
             probs: vec![0.99, 0.9, 0.5, 0.97],
-            auto: vec![], aligned: false, heard: vec![],
+            auto: vec![], aligned: false, heard: vec![], bars: None,
         }];
         // A line with the last two words: exact times and certainty
         let (exact, w) = words_of_line(&pieces, "Склад готовий", 12.0, 14.0);
@@ -1047,7 +1048,7 @@ mod tests {
             end: 6.0,
             words: w(&[("Доброго", 0.2), ("ранку", 0.9), ("отримали", 1.6), ("дванадцять", 1.6), ("генераторів", 1.62), ("на", 3.4), ("склад", 6.0), ("сьогодні", 6.0)]),
             probs: vec![],
-            auto: vec![], aligned: false, heard: vec![],
+            auto: vec![], aligned: false, heard: vec![], bars: None,
         };
         let t = retimed(&p);
         // Three words at one moment are spread up to the next one (3.4)
@@ -1063,7 +1064,7 @@ mod tests {
             end: 20.0,
             words: w(&[("перше", 10.2), ("друге", 11.0), ("третє", 24.0), ("четверте", 29.0), ("п'яте", 34.5)]),
             probs: vec![],
-            auto: vec![], aligned: false, heard: vec![],
+            auto: vec![], aligned: false, heard: vec![], bars: None,
         };
         let t = retimed(&p);
         assert!(t.iter().all(|x| (10.0..=20.0).contains(x)), "{t:?}");

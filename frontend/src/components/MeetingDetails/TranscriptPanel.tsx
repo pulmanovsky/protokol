@@ -22,6 +22,8 @@ interface CorrectionPair {
   right: string;
   /** Made for the second time: remembered without asking */
   remembered?: boolean;
+  /** Changes words by itself (a name, an abbreviation); otherwise only underlines them with its variant */
+  auto?: boolean;
 }
 
 interface TranscriptPanelProps {
@@ -182,7 +184,9 @@ export function TranscriptPanel({
         const changed = await invoke<number>('api_apply_corrections_to_meeting', { meetingId }).catch(() => 0);
         await onRefetchTranscripts?.();
         toast.success(`Додано в пам'ять: ${remembered.map((p) => `«${p.wrong}» → «${p.right}»`).join(', ')}`, {
-          description: `Виправлено вдруге — далі виправлятиметься автоматично${changed > 0 ? `; у цьому записі ще рядків: ${changed}` : ''}. Вимкнути можна у «Словнику».`,
+          description: remembered.every((p) => p.auto !== false)
+            ? `Виправлено вдруге — далі виправлятиметься автоматично${changed > 0 ? `; у цьому записі ще рядків: ${changed}` : ''}. Вимкнути можна у «Словнику».`
+            : 'Виправлено вдруге — у нових записах це буде підкреслено з варіантом виправлення. Вимкнути можна у «Словнику».',
         });
       }
       pairs = pairs.filter((p) => !p.remembered);
@@ -192,7 +196,9 @@ export function TranscriptPanel({
       }
       const list = pairs.map((p) => `«${p.wrong}» → «${p.right}»`).join(', ');
       toast(`Запам'ятати: ${list}?`, {
-        description: 'Так — це виправлятиметься автоматично у нових записах і в решті цього запису.',
+        description: pairs.every((p) => p.auto !== false)
+          ? 'Так — це виправлятиметься автоматично у нових записах і в решті цього запису.'
+          : 'Так — у нових записах це буде підкреслено з варіантом виправлення.',
         duration: 15000,
         action: {
           label: 'Так',

@@ -187,6 +187,94 @@ impl Aligner {
     }
 }
 
+impl Aligner {
+    /// Per-frame log-probabilities of the characters for a stretch of audio
+    /// (worked out a few seconds at a time, see `emissions_chunked`)
+    pub fn frames(&mut self, samples: &[f32]) -> Result<Array2<f32>> {
+        self.emissions_chunked(samples)
+    }
+
+    /// The characters of words in order, with the word separator between
+    /// words; characters the model does not know (digits, Latin) are left out
+    pub fn label(&self, words: &[String]) -> Vec<usize> {
+        let mut out = Vec::new();
+        for w in words {
+            let cs = self.chars_of(w);
+            if cs.is_empty() {
+                continue;
+            }
+            if !out.is_empty() {
+                out.push(self.sep);
+            }
+            out.extend(cs);
+        }
+        out
+    }
+
+    pub fn blank(&self) -> usize {
+        self.blank
+    }
+
+    /// Every letter and digit of the word is a character the model knows
+    /// (it has no digits or Latin letters, so it cannot hear «18» or «GPS»)
+    pub fn knows(&self, word: &str) -> bool {
+        let lower = word.to_lowercase();
+        lower.chars().any(char::is_alphanumeric) && lower.chars().filter(|c| c.is_alphanumeric()).all(|c| self.vocab.contains_key(&c))
+    }
+}
+
+/// How well a text fits the sound: log P(label | frames) under CTC, summed
+/// over every path (the forward algorithm). Texts for the same frames can be
+/// compared directly; NEG_INFINITY when the label cannot fit.
+pub fn ctc_log_likelihood(em: &Array2<f32>, label: &[usize], blank: usize) -> f32 {
+    let t_n = em.nrows();
+    if t_n == 0 {
+        return f32::NEG_INFINITY;
+    }
+    // Label with blanks around and between: b l1 b l2 … lS b
+    let mut ext = Vec::with_capacity(label.len() * 2 + 1);
+    ext.push(blank);
+    for &l in label {
+        ext.push(l);
+        ext.push(blank);
+    }
+    let n = ext.len();
+    let lse = |a: f32, b: f32| {
+        if a == f32::NEG_INFINITY {
+            b
+        } else if b == f32::NEG_INFINITY {
+            a
+        } else {
+            let m = a.max(b);
+            m + ((a - m).exp() + (b - m).exp()).ln()
+        }
+    };
+    let mut alpha = vec![f32::NEG_INFINITY; n];
+    alpha[0] = em[[0, ext[0]]];
+    if n > 1 {
+        alpha[1] = em[[0, ext[1]]];
+    }
+    let mut next = vec![f32::NEG_INFINITY; n];
+    for t in 1..t_n {
+        for s in 0..n {
+            let mut a = alpha[s];
+            if s >= 1 {
+                a = lse(a, alpha[s - 1]);
+            }
+            if s >= 2 && ext[s] != blank && ext[s] != ext[s - 2] {
+                a = lse(a, alpha[s - 2]);
+            }
+            next[s] = if a == f32::NEG_INFINITY { a } else { a + em[[t, ext[s]]] };
+        }
+        std::mem::swap(&mut alpha, &mut next);
+    }
+    if n > 1 {
+        lse(alpha[n - 1], alpha[n - 2])
+    } else {
+        alpha[0]
+    }
+}
+
 /// The frame where each token is first emitted on the best path that
 /// emits all tokens in order (blanks between, CTC)
 pub(crate) fn viterbi(em: &Array2<f32>, tokens: &[usize], blank: usize) -> Vec<Option<usize>> {
@@ -321,6 +409,29 @@ mod tests {
         assert_eq!(viterbi(&em, &[1, 2], 0), vec![Some(2), Some(6)]);
     }
 
+    #[test]
+    fn the_text_that_fits_the_sound_scores_higher() {
+        // 4 symbols (0 = blank); the sound says 1 then 2
+        let mut em = Array2::<f32>::from_elem((10, 4), -6.0);
+        for t in 0..10 {
+            em[[t, 0]] = -0.1;
+        }
+        for (t, c) in [(2, 1), (3, 1), (6, 2)] {
+            em[[t, c]] = -0.05;
+            em[[t, 0]] = -4.0;
+        }
+        let right = ctc_log_likelihood(&em, &[1, 2], 0);
+        let wrong = ctc_log_likelihood(&em, &[1, 3], 0);
+        let short = ctc_log_likelihood(&em, &[1], 0);
+        assert!(right > wrong + 3.0, "{right} {wrong}");
+        assert!(right > short + 3.0, "{right} {short}");
+        // Repeated letters need a blank between them
+        let mut em2 = Array2::<f32>::from_elem((3, 2), -0.7);
+        em2[[1, 0]] = -0.01;
+        assert!(ctc_log_likelihood(&em2, &[1, 1], 0).is_finite());
+        assert_eq!(ctc_log_likelihood(&em2, &[1, 1, 1], 0), f32::NEG_INFINITY);
+    }
+
     /// The one-off pass on a COPY of the database and meeting folder:
     /// PROTOKOL_ALIGN_DB, PROTOKOL_ALIGN_MEETING. Runs twice (the second is a no-op).
     #[tokio::test]
@@ -411,7 +522,7 @@ mod tests {
     #[test]
     fn the_part_being_heard_goes_first() {
         use crate::speakers::words::PieceWords;
-        let piece = |a: f64, b: f64| PieceWords { start: a, end: b, text: String::new(), words: vec![("x".into(), a)], probs: vec![], auto: vec![], aligned: false, heard: vec![] };
+        let piece = |a: f64, b: f64| PieceWords { start: a, end: b, text: String::new(), words: vec![("x".into(), a)], probs: vec![], auto: vec![], aligned: false, heard: vec![], bars: None };
         let pieces = vec![piece(0.0, 10.0), piece(10.0, 20.0), piece(20.0, 30.0), piece(30.0, 40.0)];
         let mut left = vec![true; 4];
         // Nothing heard: in order
@@ -429,7 +540,7 @@ mod tests {
     #[test]
     fn corrected_pieces_keep_their_words() {
         use crate::speakers::words::PieceWords;
-        let piece = |w: &[(&str, f64)], aligned: bool| PieceWords { start: 0.0, end: 3.0, text: String::new(), words: w.iter().map(|(a, b)| (a.to_string(), *b)).collect(), probs: vec![], auto: vec![], aligned, heard: vec![] };
+        let piece = |w: &[(&str, f64)], aligned: bool| PieceWords { start: 0.0, end: 3.0, text: String::new(), words: w.iter().map(|(a, b)| (a.to_string(), *b)).collect(), probs: vec![], auto: vec![], aligned, heard: vec![], bars: None };
         let mut now = vec![piece(&[("так", 0.0), ("ні", 1.0)], false), piece(&[("нове", 0.0)], false)];
         let aligned = vec![piece(&[("так", 0.4), ("ні", 1.2)], true), piece(&[("старе", 0.7)], true)];
         assert_eq!(super::take_aligned(&mut now, &aligned), 1);

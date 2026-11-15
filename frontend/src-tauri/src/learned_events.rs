@@ -27,6 +27,10 @@ pub struct Learned {
     pub count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meeting: Option<String>,
+    /// A word rule: changes words by itself (a name, an abbreviation), or
+    /// only underlines them with its variant
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<bool>,
 }
 
 pub fn init(app: &AppHandle<Wry>) {
@@ -41,7 +45,8 @@ pub fn note(kind: &str, from: &str, to: &str, count: usize, meeting: Option<&str
     if count == 0 {
         return;
     }
-    let item = Learned { at: chrono::Utc::now().to_rfc3339(), kind: kind.into(), from: from.into(), to: to.into(), count, meeting: meeting.map(String::from) };
+    let auto = (kind == "word").then(|| crate::ukrainian::corrections::applies_by_itself_now(from, to));
+    let item = Learned { at: chrono::Utc::now().to_rfc3339(), kind: kind.into(), from: from.into(), to: to.into(), count, meeting: meeting.map(String::from), auto };
     if let Some(path) = LOG.get() {
         append(path, &item);
     }
@@ -217,7 +222,7 @@ mod tests {
         let path = dir.path().join("learned_log.jsonl");
         let at = |s: &str| format!("2026-11-08T{s}:00+00:00");
         for (t, kind, count, meeting) in [("06:00", "word", 1, None), ("08:00", "word", 2, None), ("08:05", "voice", 1, Some("m1")), ("08:10", "applied", 3, Some("m1")), ("08:20", "applied", 2, Some("m1")), ("08:30", "applied", 1, Some("m2")), ("08:40", "document", 5, Some("m1"))] {
-            append(&path, &Learned { at: at(t), kind: kind.into(), from: String::new(), to: String::new(), count, meeting: meeting.map(String::from) });
+            append(&path, &Learned { at: at(t), kind: kind.into(), from: String::new(), to: String::new(), count, meeting: meeting.map(String::from), auto: None });
         }
         let text = std::fs::read_to_string(&path).unwrap();
         let s = summary_of(&text, Some(&at("07:00")));
@@ -230,8 +235,8 @@ mod tests {
     #[test]
     fn rules_with_their_uses() {
         let log = [
-            Learned { at: "2026-11-07T08:00:00+00:00".into(), kind: "word".into(), from: "репеті".into(), to: "ЦНАП".into(), count: 1, meeting: Some("m0".into()) },
-            Learned { at: "2026-11-08T08:00:00+00:00".into(), kind: "word".into(), from: "прат".into(), to: "ПрАТ".into(), count: 1, meeting: None },
+            Learned { at: "2026-11-07T08:00:00+00:00".into(), kind: "word".into(), from: "репеті".into(), to: "ЦНАП".into(), count: 1, meeting: Some("m0".into()), auto: None },
+            Learned { at: "2026-11-08T08:00:00+00:00".into(), kind: "word".into(), from: "прат".into(), to: "ПрАТ".into(), count: 1, meeting: None, auto: None },
         ]
         .iter()
         .map(|l| serde_json::to_string(l).unwrap())

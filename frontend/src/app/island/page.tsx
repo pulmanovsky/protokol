@@ -109,7 +109,7 @@ export default function IslandPage() {
   const [sources] = useState(readStoredSources);
   const [muted, setMuted] = useMicMute();
   const [callMuted, setCallMuted] = useCallMute();
-  // A Google Meet offer while neither Protokol window is in front (meet/live.rs)
+  // An offer to start or end the recording while neither Protokol window is in front (meet/live.rs)
   const [prompt, setPrompt] = useState<MeetPrompt | null>(null);
 
   const capsuleRef = useRef<HTMLDivElement>(null);
@@ -315,7 +315,7 @@ export default function IslandPage() {
   const outwards = side === 'right' ? 'left' : 'right';
   const inwards = side === 'right' ? 'right' : 'left';
 
-  // ---------- A Google Meet offer ----------
+  // ---------- An offer to start or end the recording ----------
   if (prompt) {
     return (
       <div style={row}>
@@ -323,7 +323,7 @@ export default function IslandPage() {
           {prompt.kind === 'start' ? (
             <>
               <span className="isl-text" data-tauri-drag-region>
-                Нарада в Meet почалась
+                {prompt.source === 'call' ? 'Дзвінок відкрито' : 'Нарада в Meet почалась'}
               </span>
               <span className="isl-sub" data-tauri-drag-region>
                 · запис не йде
@@ -339,7 +339,7 @@ export default function IslandPage() {
           ) : (
             <>
               <span className="isl-text" data-tauri-drag-region>
-                Нарада в Meet завершилась
+                {prompt.source === 'calendar' ? 'Час наради минув' : 'Нарада в Meet завершилась'}
               </span>
               <button type="button" className="isl-pill" onClick={() => answerPrompt('no')}>
                 Продовжити
