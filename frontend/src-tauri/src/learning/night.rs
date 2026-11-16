@@ -51,10 +51,11 @@ pub enum Stage {
 }
 
 /// New checked speech (hours) since the last run that got as far as the check
+/// and counted the speech as now; with none, all of it is new
 pub fn new_hours(history: &[Run], checked_hours: f64) -> f64 {
     history
         .iter()
-        .find(|r| matches!(r.outcome, Outcome::Accepted | Outcome::Rejected))
+        .find(|r| matches!(r.outcome, Outcome::Accepted | Outcome::Rejected) && r.data_rule == super::dataset::DATA_RULE)
         .map(|r| (checked_hours - r.checked_hours).max(0.0))
         .unwrap_or(checked_hours)
 }
@@ -115,6 +116,7 @@ fn failed(id: &str, reason: String) -> Run {
         train_meetings: 0,
         held_meetings: 0,
         checked_hours: 0.0,
+        data_rule: super::dataset::DATA_RULE,
         wer_before: None,
         wer_after: None,
         per_meeting: Vec::new(),
@@ -255,6 +257,10 @@ mod tests {
         assert_eq!(new_hours(&[], 3.0), 3.0);
         let h = vec![r("2026-11-23T01-30", Outcome::Failed, 0.0), r("2026-11-22T01-30", Outcome::Rejected, 5.0), r("2026-11-15T01-30", Outcome::Accepted, 3.75)];
         assert!((new_hours(&h, 6.5) - 1.5).abs() < 1e-9);
+        // A run of 0.4.0 counted older meetings too: all speech counted now is new
+        let mut old = r("2026-11-16T01-30", Outcome::Rejected, 5.0);
+        old.data_rule = 0;
+        assert!((new_hours(&[old], 2.2) - 2.2).abs() < 1e-9);
     }
 
     #[test]

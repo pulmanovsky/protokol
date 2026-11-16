@@ -32,7 +32,7 @@ import { useMeetingData } from '@/hooks/meeting-details/useMeetingData';
 import { useSummaryGeneration } from '@/hooks/meeting-details/useSummaryGeneration';
 import { useTemplates } from '@/hooks/meeting-details/useTemplates';
 import { useSpeakerRecognition } from '@/hooks/meeting-details/useSpeakerRecognition';
-import { JUMP_TO_TIME_EVENT, PLAY_FROM_EVENT, PLAY_RANGE_EVENT, TIME_CLICKED_EVENT, mmss, MARK_ALL_REVIEWED_EVENT } from '@/lib/timeline';
+import { JUMP_TO_TIME_EVENT, PLAY_FROM_EVENT, PLAY_RANGE_EVENT, TIME_CLICKED_EVENT, mmss } from '@/lib/timeline';
 import { useCopyOperations } from '@/hooks/meeting-details/useCopyOperations';
 import { useMeetingOperations } from '@/hooks/meeting-details/useMeetingOperations';
 import { useConfig } from '@/contexts/ConfigContext';
@@ -779,30 +779,12 @@ export default function PageContent({
           </button>
         </div>
       )}
-      {reviewProgress && reviewProgress.total > 0 && (
-            reviewProgress.reviewed >= reviewProgress.total ? (
-              (noSource > 0 || numbers.count > 0) && (
-                <div className="doc-banner doc-banner-warn">
-                  {noSource > 0 && `Пунктів без джерела: ${noSource} — перевірте пункти, підсвічені жовтим.`}
-                  {numbers.count > 0 && ` Чисел, яких немає в стенограмі: ${numbers.count} — вони підсвічені жовтим.`}
-                </div>
-              )
-            ) : (
-              <div className="doc-banner doc-banner-warn">
-                Стенограму перевірено не повністю: {reviewProgress.reviewed} з {reviewProgress.total} рядків. Імена й слова в документі можуть бути неточні.
-                {noSource > 0 && <> Пунктів без джерела: {noSource}.</>}
-                {numbers.count > 0 && <> Чисел, яких немає в стенограмі: {numbers.count}.</>}
-                <button type="button" className="ml-2 font-semibold underline" onClick={() => setStep('transcript')}>
-                  Перевірити →
-                </button>
-                {!isRecording && speakerRecognition.progress === null && (
-                  <button type="button" className="ml-3 font-semibold underline" onClick={() => window.dispatchEvent(new Event(MARK_ALL_REVIEWED_EVENT))}>
-                    Позначити все перевіреним
-                  </button>
-                )}
-              </div>
-            )
-          )}
+      {(noSource > 0 || numbers.count > 0) && (
+        <div className="doc-banner doc-banner-warn">
+          {noSource > 0 && `Пунктів без джерела: ${noSource} — перевірте пункти, підсвічені жовтим.`}
+          {numbers.count > 0 && ` Чисел, яких немає в стенограмі: ${numbers.count} — вони підсвічені жовтим.`}
+        </div>
+      )}
     </>
   );
 

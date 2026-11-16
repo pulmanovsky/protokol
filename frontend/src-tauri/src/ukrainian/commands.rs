@@ -275,7 +275,7 @@ pub async fn api_edit_transcript_line(
         let pairs = edit_line(pool, &meeting_id, &segment_id, &text, finished.unwrap_or(true), before.as_deref()).await?;
         // Fixed in the word strip: the line counts as checked, in the same step
         if reviewed == Some(true) {
-            crate::speakers::lines::set_reviewed(pool, &meeting_id, std::slice::from_ref(&segment_id), true).await.map_err(|e| e.to_string())?;
+            crate::speakers::lines::set_reviewed(pool, &meeting_id, std::slice::from_ref(&segment_id), Some(crate::speakers::lines::ReviewKind::Edited)).await.map_err(|e| e.to_string())?;
         }
         Ok(pairs)
     })
@@ -412,7 +412,8 @@ fn rules_to_apply(all: Vec<(String, String)>, only: Option<&[String]>) -> Vec<(S
 
 /// Reads the words of all checked lines (`corrections::set_checked_words`)
 pub async fn refresh_checked_words(pool: &sqlx::SqlitePool) -> Result<(), String> {
-    let texts: Vec<String> = sqlx::query_scalar("SELECT transcript FROM transcripts WHERE reviewed_at IS NOT NULL").fetch_all(pool).await.map_err(|e| e.to_string())?;
+    let sql = format!("SELECT transcript FROM transcripts WHERE {}", crate::speakers::lines::CHECKED_BY_HAND);
+    let texts: Vec<String> = sqlx::query_scalar(&sql).fetch_all(pool).await.map_err(|e| e.to_string())?;
     let words = texts.iter().flat_map(|t| t.split_whitespace()).map(crate::quality::score::norm).filter(|w| !w.is_empty()).collect();
     super::corrections::set_checked_words(words);
     Ok(())
@@ -611,7 +612,7 @@ pub(crate) async fn resolve_doubt(pool: &sqlx::SqlitePool, meeting_id: &str, sec
                     let recorded = match (segment_id, lines_before) {
                         // The line it is in counts as checked, in the same step
                         (Some(id), Some(state)) => {
-                            crate::speakers::lines::set_reviewed(pool, meeting_id, &[id.to_string()], true).await.map_err(|e| e.to_string())?;
+                            crate::speakers::lines::set_reviewed(pool, meeting_id, &[id.to_string()], Some(crate::speakers::lines::ReviewKind::Edited)).await.map_err(|e| e.to_string())?;
                             crate::speakers::journal::record_word_on_line(pool, meeting_id, b, a, state).await
                         }
                         _ => crate::speakers::journal::record_word(pool, meeting_id, b, a).await,

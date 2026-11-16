@@ -250,8 +250,8 @@ async fn split_row(pool: &SqlitePool, id: &str, words: &[WordTime], at: usize, t
     let mut tx = pool.begin().await?;
     // The copy keeps everything of the line (speaker, «змінено вручну»…)
     sqlx::query(
-        "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, summary, action_items, key_points, audio_start_time, audio_end_time, duration, speaker, speaker_manual, reviewed_at)
-         SELECT ?, meeting_id, ?, timestamp, summary, action_items, key_points, ?, ?, ?, speaker, speaker_manual, reviewed_at FROM transcripts WHERE id = ?",
+        "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, summary, action_items, key_points, audio_start_time, audio_end_time, duration, speaker, speaker_manual, reviewed_at, review_kind)
+         SELECT ?, meeting_id, ?, timestamp, summary, action_items, key_points, ?, ?, ?, speaker, speaker_manual, reviewed_at, review_kind FROM transcripts WHERE id = ?",
     )
     .bind(&new_id)
     .bind(&rest)
@@ -296,8 +296,12 @@ pub async fn merge(pool: &SqlitePool, meeting_id: &str, segment_id: &str) -> Res
 async fn merge_rows(pool: &SqlitePool, first: &Row, second: &Row) -> Result<()> {
     let mut tx = pool.begin().await?;
     sqlx::query(
-        "UPDATE transcripts SET transcript = ?, audio_end_time = ?, duration = ? - COALESCE(audio_start_time, 0), original_transcript = NULL,
-         reviewed_at = CASE WHEN reviewed_at IS NOT NULL AND (SELECT reviewed_at FROM transcripts WHERE id = ?) IS NOT NULL THEN reviewed_at END WHERE id = ?",
+        "UPDATE transcripts SET transcript = ?1, audio_end_time = ?2, duration = ?3 - COALESCE(audio_start_time, 0), original_transcript = NULL,
+         reviewed_at = CASE WHEN reviewed_at IS NOT NULL AND (SELECT reviewed_at FROM transcripts WHERE id = ?4) IS NOT NULL THEN reviewed_at END,
+         review_kind = CASE WHEN reviewed_at IS NULL OR (SELECT reviewed_at FROM transcripts WHERE id = ?4) IS NULL THEN NULL
+                            WHEN review_kind = 'all' OR (SELECT review_kind FROM transcripts WHERE id = ?4) = 'all' THEN 'all'
+                            ELSE review_kind END
+         WHERE id = ?5",
     )
     .bind(format!("{} {}", first.1.trim(), second.1.trim()))
     .bind(second.3)
@@ -358,17 +362,66 @@ pub async fn apply(pool: &SqlitePool, meeting_id: &str) -> Result<(usize, usize)
     Ok((done, reviewed))
 }
 
-/// Marks lines «перевірено» (or not): kept by time for a new recognition
-pub async fn set_reviewed(pool: &SqlitePool, meeting_id: &str, segment_ids: &[String], reviewed: bool) -> Result<()> {
+/// How a line came to count as checked. All of these are the secretary's
+/// own checks, which the measurements and the training trust; the old
+/// «Позначити все перевіреним» (gone in 0.4.1) left `all` on lines nobody read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewKind {
+    /// Read on screen
+    Read,
+    /// Listened through
+    Heard,
+    /// Fixed, or a word in it confirmed
+    Edited,
+    /// Marked by hand (⌘Enter, the mark on the line)
+    Marked,
+}
+
+impl ReviewKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReviewKind::Read => "read",
+            ReviewKind::Heard => "heard",
+            ReviewKind::Edited => "edited",
+            ReviewKind::Marked => "marked",
+        }
+    }
+
+    /// As the transcript view names it; anything else is a mark by hand
+    pub fn parse(how: Option<&str>) -> Self {
+        match how {
+            Some("read") => ReviewKind::Read,
+            Some("heard") => ReviewKind::Heard,
+            Some("edited") => ReviewKind::Edited,
+            _ => ReviewKind::Marked,
+        }
+    }
+}
+
+/// SQL condition on `transcripts`: a line the secretary checked himself,
+/// not one marked all at once. What measurements and training learn from.
+pub const CHECKED_BY_HAND: &str = "reviewed_at IS NOT NULL AND COALESCE(review_kind, '') <> 'all'";
+
+/// Marks lines «перевірено» (`Some(how)`) or not (`None`): kept by time
+/// for a new recognition
+pub async fn set_reviewed(pool: &SqlitePool, meeting_id: &str, segment_ids: &[String], how: Option<ReviewKind>) -> Result<()> {
     let rows = rows_of(pool, meeting_id).await?;
     let now = chrono::Utc::now().to_rfc3339();
+    let kind = how.map(ReviewKind::as_str);
     for id in segment_ids {
         let Some(r) = rows.iter().find(|r| &r.0 == id) else { continue };
         sqlx::query("DELETE FROM segment_reviews WHERE meeting_id = ? AND start < ? AND end > ?").bind(meeting_id).bind(r.3.max(r.2 + 0.01)).bind(r.2).execute(pool).await?;
-        if reviewed {
-            sqlx::query("INSERT INTO segment_reviews (meeting_id, start, end, created_at) VALUES (?, ?, ?, ?)").bind(meeting_id).bind(r.2).bind(r.3).bind(&now).execute(pool).await?;
+        if let Some(kind) = kind {
+            sqlx::query("INSERT INTO segment_reviews (meeting_id, start, end, created_at, kind) VALUES (?, ?, ?, ?, ?)")
+                .bind(meeting_id)
+                .bind(r.2)
+                .bind(r.3)
+                .bind(&now)
+                .bind(kind)
+                .execute(pool)
+                .await?;
         }
-        sqlx::query("UPDATE transcripts SET reviewed_at = ? WHERE id = ?").bind(reviewed.then_some(&now)).bind(id).execute(pool).await?;
+        sqlx::query("UPDATE transcripts SET reviewed_at = ?, review_kind = ? WHERE id = ?").bind(kind.map(|_| &now)).bind(kind).bind(id).execute(pool).await?;
     }
     Ok(())
 }
@@ -407,28 +460,37 @@ pub async fn excluded_ids(pool: &SqlitePool, meeting_id: &str) -> Result<std::co
         .collect())
 }
 
-/// Every line not yet checked counts as checked
-pub async fn mark_all_reviewed(pool: &SqlitePool, meeting_id: &str) -> Result<()> {
-    let open: Vec<String> = sqlx::query_scalar("SELECT id FROM transcripts WHERE meeting_id = ? AND reviewed_at IS NULL").bind(meeting_id).fetch_all(pool).await?;
-    set_reviewed(pool, meeting_id, &open, true).await
-}
-
 async fn mark_reviewed_from_spans(pool: &SqlitePool, meeting_id: &str) -> Result<usize> {
-    let spans: Vec<(f64, f64, String)> = sqlx::query_as("SELECT start, end, created_at FROM segment_reviews WHERE meeting_id = ?").bind(meeting_id).fetch_all(pool).await?;
+    let spans: Vec<(f64, f64, String, Option<String>)> =
+        sqlx::query_as("SELECT start, end, created_at, kind FROM segment_reviews WHERE meeting_id = ?").bind(meeting_id).fetch_all(pool).await?;
     if spans.is_empty() {
         return Ok(0);
     }
     let mut n = 0;
     for (id, _, a, b, _) in rows_of(pool, meeting_id).await? {
-        let length = (b - a).max(0.01);
-        let covered: f64 = spans.iter().map(|(s, e, _)| (b.min(*e) - a.max(*s)).max(0.0)).sum();
-        if covered >= length / 2.0 {
-            let at = spans.iter().find(|(s, e, _)| *s < b && *e > a).map(|x| x.2.clone());
-            sqlx::query("UPDATE transcripts SET reviewed_at = ? WHERE id = ?").bind(at).bind(&id).execute(pool).await?;
+        if let Some((at, kind)) = review_from_spans(&spans, a, b) {
+            sqlx::query("UPDATE transcripts SET reviewed_at = ?, review_kind = ? WHERE id = ?").bind(at).bind(kind).bind(&id).execute(pool).await?;
             n += 1;
         }
     }
     Ok(n)
+}
+
+/// A line `a..b` of a new recognition is checked when half of it lies under
+/// checked spans; it counts as checked by hand only when half lies under
+/// spans checked by hand (not marked all at once)
+fn review_from_spans(spans: &[(f64, f64, String, Option<String>)], a: f64, b: f64) -> Option<(String, String)> {
+    let length = (b - a).max(0.01);
+    let over = |s: &f64, e: &f64| (b.min(*e) - a.max(*s)).max(0.0);
+    let by_hand = |k: &Option<String>| k.as_deref() != Some("all");
+    let covered: f64 = spans.iter().map(|(s, e, ..)| over(s, e)).sum();
+    if covered < length / 2.0 {
+        return None;
+    }
+    let covered_by_hand: f64 = spans.iter().filter(|x| by_hand(&x.3)).map(|(s, e, ..)| over(s, e)).sum();
+    let hand = covered_by_hand >= length / 2.0;
+    let (_, _, at, kind) = spans.iter().find(|(s, e, _, k)| *s < b && *e > a && by_hand(k) == hand)?;
+    Some((at.clone(), if hand { kind.clone().unwrap_or_else(|| "read".into()) } else { "all".into() }))
 }
 
 /// How much of a meeting is checked: lines and share of the speaking time
@@ -861,15 +923,23 @@ pub async fn cut_out(pool: &SqlitePool, meeting_id: &str, segment_id: &str, from
 }
 
 #[tauri::command]
-pub async fn set_segments_reviewed<R: tauri::Runtime>(app: tauri::AppHandle<R>, meeting_id: String, segment_ids: Vec<String>, reviewed: bool, quiet: Option<bool>) -> Result<ReviewProgress, String> {
+pub async fn set_segments_reviewed<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    meeting_id: String,
+    segment_ids: Vec<String>,
+    reviewed: bool,
+    quiet: Option<bool>,
+    how: Option<String>,
+) -> Result<ReviewProgress, String> {
     let pool = super::commands::pool(&app).map_err(|e| e.to_string())?;
-    // Marked on its own (a line listened through or corrected): not a step to undo
+    let how = reviewed.then(|| ReviewKind::parse(how.as_deref()));
+    // Marked on its own (a line read, listened through or corrected): not a step to undo
     if quiet.unwrap_or(false) {
-        set_reviewed(&pool, &meeting_id, &segment_ids, reviewed).await.map_err(|e| e.to_string())?;
+        set_reviewed(&pool, &meeting_id, &segment_ids, how).await.map_err(|e| e.to_string())?;
         return progress(&pool, &meeting_id).await.map_err(|e| e.to_string());
     }
     let label = if reviewed { "позначка «перевірено»" } else { "зняття позначки «перевірено»" };
-    crate::speakers::journal::journaled(&pool, &meeting_id, label, || async { set_reviewed(&pool, &meeting_id, &segment_ids, reviewed).await.map_err(|e| e.to_string()) }).await?;
+    crate::speakers::journal::journaled(&pool, &meeting_id, label, || async { set_reviewed(&pool, &meeting_id, &segment_ids, how).await.map_err(|e| e.to_string()) }).await?;
     progress(&pool, &meeting_id).await.map_err(|e| e.to_string())
 }
 
@@ -879,14 +949,6 @@ pub async fn set_segments_excluded<R: tauri::Runtime>(app: tauri::AppHandle<R>, 
     let pool = super::commands::pool(&app).map_err(|e| e.to_string())?;
     let label = if excluded { "рядок не включено в документ" } else { "рядок знову включено в документ" };
     crate::speakers::journal::journaled(&pool, &meeting_id, label, || async { set_excluded(&pool, &meeting_id, &segment_ids, excluded).await.map_err(|e| e.to_string()) }).await
-}
-
-/// «Позначити все перевіреним»: one step of the history
-#[tauri::command]
-pub async fn api_mark_all_reviewed<R: tauri::Runtime>(app: tauri::AppHandle<R>, meeting_id: String) -> Result<ReviewProgress, String> {
-    let pool = super::commands::pool(&app).map_err(|e| e.to_string())?;
-    crate::speakers::journal::journaled(&pool, &meeting_id, "усе позначено перевіреним", || async { mark_all_reviewed(&pool, &meeting_id).await.map_err(|e| e.to_string()) }).await?;
-    progress(&pool, &meeting_id).await.map_err(|e| e.to_string())
 }
 
 /// Every meeting's checked share of speaking time (0..1), for the list of meetings
@@ -1254,13 +1316,100 @@ mod tests {
         let pool = m.pool().clone();
         let p = progress(&pool, "m1").await.unwrap();
         assert_eq!((p.reviewed, p.total), (0, 2));
-        set_reviewed(&pool, "m1", &["a".to_string()], true).await.unwrap();
+        set_reviewed(&pool, "m1", &["a".to_string()], Some(ReviewKind::Read)).await.unwrap();
         let p = progress(&pool, "m1").await.unwrap();
         assert_eq!((p.reviewed, p.seconds_reviewed, p.seconds_total), (1, 10.0, 14.0));
-        sqlx::query("UPDATE transcripts SET reviewed_at = NULL, id = 'z' WHERE id = 'a'").execute(&pool).await.unwrap();
+        sqlx::query("UPDATE transcripts SET reviewed_at = NULL, review_kind = NULL, id = 'z' WHERE id = 'a'").execute(&pool).await.unwrap();
         apply(&pool, "m1").await.unwrap();
         assert_eq!(progress(&pool, "m1").await.unwrap().reviewed, 1);
-        set_reviewed(&pool, "m1", &["z".to_string()], false).await.unwrap();
+        let kind: Option<String> = sqlx::query_scalar("SELECT review_kind FROM transcripts WHERE id = 'z'").fetch_one(&pool).await.unwrap();
+        assert_eq!(kind.as_deref(), Some("read"), "how it was checked survives a new recognition");
+        set_reviewed(&pool, "m1", &["z".to_string()], None).await.unwrap();
         assert_eq!(progress(&pool, "m1").await.unwrap().reviewed, 0);
+        let kind: Option<String> = sqlx::query_scalar("SELECT review_kind FROM transcripts WHERE id = 'z'").fetch_one(&pool).await.unwrap();
+        assert_eq!(kind, None);
+    }
+
+    #[test]
+    fn a_new_line_under_spans_marked_all_at_once_is_not_checked_by_hand() {
+        let span = |s: f64, e: f64, at: &str, k: Option<&str>| (s, e, at.to_string(), k.map(str::to_string));
+        let spans = vec![span(0.0, 10.0, "t1", Some("all")), span(10.0, 14.0, "t2", Some("heard")), span(14.0, 16.0, "t3", None)];
+        assert_eq!(review_from_spans(&spans, 1.0, 9.0), Some(("t1".into(), "all".into())));
+        assert_eq!(review_from_spans(&spans, 10.5, 13.5), Some(("t2".into(), "heard".into())));
+        // Mostly under a span checked by hand
+        assert_eq!(review_from_spans(&spans, 8.0, 14.0), Some(("t2".into(), "heard".into())));
+        // Mostly under the span marked all at once
+        assert_eq!(review_from_spans(&spans, 6.0, 12.0), Some(("t1".into(), "all".into())));
+        // A span from before kinds were kept counts as read
+        assert_eq!(review_from_spans(&spans, 14.0, 16.0), Some(("t3".into(), "read".into())));
+        assert_eq!(review_from_spans(&spans, 16.0, 20.0), None);
+    }
+
+    /// The migration that brought kinds: lines marked all at once before it
+    /// share one moment, and are no longer trusted
+    #[tokio::test]
+    async fn earlier_marks_all_at_once_are_told_from_lines_read() {
+        let (_d, m) = meeting().await;
+        let pool = m.pool().clone();
+        for k in 0..8 {
+            sqlx::query("INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time) VALUES (?, 'm1', 'Рядок', 'x', ?, ?)")
+                .bind(format!("bulk{k}"))
+                .bind(20.0 + k as f64)
+                .bind(20.5 + k as f64)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("UPDATE transcripts SET reviewed_at = '2026-11-14T10:00:00.123456789+00:00' WHERE id LIKE 'bulk%'").execute(&pool).await.unwrap();
+        // Each marked line kept its span, as `set_reviewed` does
+        sqlx::query("INSERT INTO segment_reviews (meeting_id, start, end, created_at) SELECT meeting_id, audio_start_time, audio_end_time, reviewed_at FROM transcripts WHERE id LIKE 'bulk%'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // One line read, then cut into seven by a new recognition: one span, seven lines at one moment
+        for k in 0..7 {
+            sqlx::query("INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, reviewed_at) VALUES (?, 'm1', 'Рядок', 'x', ?, ?, '2026-11-14T12:00:00.7+00:00')")
+                .bind(format!("cut{k}"))
+                .bind(60.0 + k as f64)
+                .bind(61.0 + k as f64)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO segment_reviews (meeting_id, start, end, created_at) VALUES ('m1', 60.0, 67.0, '2026-11-14T12:00:00.7+00:00')").execute(&pool).await.unwrap();
+        sqlx::query("UPDATE transcripts SET reviewed_at = '2026-11-14T09:00:00.1+00:00' WHERE id = 'a'").execute(&pool).await.unwrap();
+        sqlx::query("UPDATE transcripts SET reviewed_at = '2026-11-14T09:00:01.2+00:00', original_transcript = 'Дякую далі звязок' WHERE id = 'b'").execute(&pool).await.unwrap();
+        // Two lines left after reading, marked all at once: too few to tell by
+        // the moment, found in the history of changes
+        for (k, id) in ["late0", "late1"].iter().enumerate() {
+            sqlx::query("INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, reviewed_at) VALUES (?, 'm1', 'Рядок', 'x', ?, ?, '2026-11-14T11:00:00.5+00:00')")
+                .bind(id)
+                .bind(40.0 + k as f64)
+                .bind(40.5 + k as f64)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let after = serde_json::json!({"lines": {"late0": {"reviewed_at": "2026-11-14T11:00:00.5+00:00"}, "late1": {"reviewed_at": "2026-11-14T11:00:00.5+00:00"}}, "side": {}});
+        sqlx::query("INSERT INTO edit_journal (meeting_id, label, before_state, after_state, created_at) VALUES ('m1', 'усе позначено перевіреним', '{}', ?, 'x')")
+            .bind(after.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO edit_journal (meeting_id, label, before_state, after_state, created_at) VALUES ('m1', 'усе позначено перевіреним', '{}', 'not json', 'x')").execute(&pool).await.unwrap();
+        let migration = include_str!("../../migrations/20261116000000_add_review_kind.sql");
+        let updates: String = migration.lines().filter(|l| !l.trim_start().starts_with("--") && !l.starts_with("ALTER")).collect::<Vec<_>>().join("\n");
+        sqlx::raw_sql(&updates).execute(&pool).await.unwrap();
+        let kinds: std::collections::HashMap<String, Option<String>> =
+            sqlx::query_as::<_, (String, Option<String>)>("SELECT id, review_kind FROM transcripts").fetch_all(&pool).await.unwrap().into_iter().collect();
+        assert_eq!(kinds["a"].as_deref(), Some("read"));
+        assert_eq!(kinds["b"].as_deref(), Some("edited"));
+        assert_eq!(kinds["bulk3"].as_deref(), Some("all"));
+        assert_eq!(kinds["late1"].as_deref(), Some("all"));
+        assert_eq!(kinds["cut4"].as_deref(), Some("read"));
+        let by_hand: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM transcripts WHERE {CHECKED_BY_HAND}")).fetch_one(&pool).await.unwrap();
+        assert_eq!(by_hand, 9);
+        // Still checked for the transcript and the document
+        assert_eq!(progress(&pool, "m1").await.unwrap().reviewed, 19);
     }
 }

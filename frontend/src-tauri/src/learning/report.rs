@@ -223,6 +223,7 @@ mod tests {
             train_meetings: 10,
             held_meetings: 2,
             checked_hours: 3.5,
+            data_rule: crate::learning::dataset::DATA_RULE,
             wer_before: Some(17.5),
             wer_after: Some(15.8),
             per_meeting: vec![(16.0, 14.0), (19.0, 17.6)],

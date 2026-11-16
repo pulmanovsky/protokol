@@ -26,8 +26,6 @@ export const TIME_CLICKED_EVENT = 'protokol:time-clicked';
 export const PLAY_FROM_EVENT = 'protokol:play-from';
 /** Event: play one stretch of the recording ({ start, end, loop }) — a line */
 export const PLAY_RANGE_EVENT = 'protokol:play-range';
-/** «Позначити все перевіреним», asked from outside the transcript */
-export const MARK_ALL_REVIEWED_EVENT = 'protokol:mark-all-reviewed';
 export function playRange(start: number, end: number, loop = false) {
   window.dispatchEvent(new CustomEvent(PLAY_RANGE_EVENT, { detail: { start, end, loop } }));
 }

@@ -59,6 +59,9 @@ pub struct Run {
     /// All checked speech at the time of the run (hours): the next run waits
     /// for enough new speech after this
     pub checked_hours: f64,
+    /// How that speech was counted (`dataset::DATA_RULE`); 0 before 0.4.1
+    #[serde(default)]
+    pub data_rule: u32,
     /// Mistakes per 100 words on the held-out meetings: the model in use and the new one
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wer_before: Option<f64>,
@@ -354,6 +357,7 @@ pub fn sample_run(id: &str, outcome: Outcome) -> Run {
         train_meetings: 10,
         held_meetings: 3,
         checked_hours: 3.75,
+        data_rule: super::dataset::DATA_RULE,
         wer_before: Some(17.5),
         wer_after: Some(15.8),
         per_meeting: vec![(16.2, 14.2)],
@@ -387,6 +391,7 @@ mod tests {
             train_meetings: 10,
             held_meetings: 3,
             checked_hours: 3.75,
+            data_rule: crate::learning::dataset::DATA_RULE,
             wer_before: Some(17.5),
             wer_after: Some(15.8),
             per_meeting: vec![(16.2, 14.2)],

@@ -14,7 +14,7 @@ use serde_json::Value;
 use sqlx::{Row, SqlitePool};
 use std::collections::BTreeMap;
 
-const ROW_COLUMNS: &str = "id, meeting_id, transcript, timestamp, summary, action_items, key_points, audio_start_time, audio_end_time, duration, speaker, original_transcript, speaker_manual, reviewed_at";
+const ROW_COLUMNS: &str = "id, meeting_id, transcript, timestamp, summary, action_items, key_points, audio_start_time, audio_end_time, duration, speaker, original_transcript, speaker_manual, reviewed_at, review_kind";
 
 /// A transcript line with every column
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -32,6 +32,8 @@ struct Line {
     original_transcript: Option<String>,
     speaker_manual: i64,
     reviewed_at: Option<String>,
+    #[serde(default)]
+    review_kind: Option<String>,
 }
 
 /// The meeting as far as changes by hand go
@@ -52,7 +54,7 @@ pub const WORD_KEPT: &str = "слово підтверджено";
 const SIDE: &[(&str, &str)] = &[
     ("speaker_overrides", "start, end, speaker, previous, created_at"),
     ("segment_edits", "kind, at, created_at"),
-    ("segment_reviews", "start, end, created_at"),
+    ("segment_reviews", "start, end, created_at, kind"),
     ("segment_exclusions", "start, end, created_at"),
     ("meeting_speakers", "label, name, hex(centroid) AS centroid, speech_seconds, role, suggested, meet_name, name_source"),
 ];
@@ -75,6 +77,7 @@ pub async fn capture(pool: &SqlitePool, meeting_id: &str) -> Result<State> {
             original_transcript: r.get("original_transcript"),
             speaker_manual: r.try_get::<Option<i64>, _>("speaker_manual").ok().flatten().unwrap_or(0),
             reviewed_at: r.get("reviewed_at"),
+            review_kind: r.get("review_kind"),
         };
         lines.insert(line.id.clone(), line);
     }
@@ -209,7 +212,7 @@ async fn restore(pool: &SqlitePool, meeting_id: &str, state: &State) -> Result<V
             texts.push((c, line.transcript.clone(), line.audio_start_time.unwrap_or(0.0)));
         }
         sqlx::query(&format!(
-            "INSERT OR REPLACE INTO transcripts ({ROW_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT OR REPLACE INTO transcripts ({ROW_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ))
         .bind(&line.id)
         .bind(meeting_id)
@@ -225,6 +228,7 @@ async fn restore(pool: &SqlitePool, meeting_id: &str, state: &State) -> Result<V
         .bind(&line.original_transcript)
         .bind(line.speaker_manual)
         .bind(&line.reviewed_at)
+        .bind(&line.review_kind)
         .execute(&mut *tx)
         .await?;
     }
@@ -466,20 +470,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn everything_marked_is_one_step_and_keeps_earlier_marks() {
+    async fn how_a_line_was_checked_goes_back_and_comes_again_with_its_mark() {
+        use crate::speakers::lines::{set_reviewed, ReviewKind};
         let (_dir, manager) = meeting().await;
         let pool = manager.pool().clone();
-        crate::speakers::lines::set_reviewed(&pool, "m1", &["a".to_string()], true).await.unwrap();
-        let earlier: Option<String> = sqlx::query_scalar("SELECT reviewed_at FROM transcripts WHERE id = 'a'").fetch_one(&pool).await.unwrap();
-        journaled(&pool, "m1", "усе", || async { crate::speakers::lines::mark_all_reviewed(&pool, "m1").await.map_err(|e| e.to_string()) }).await.unwrap();
-        let progress = crate::speakers::lines::progress(&pool, "m1").await.unwrap();
-        assert_eq!(progress.reviewed, progress.total);
-        let kept: Option<String> = sqlx::query_scalar("SELECT reviewed_at FROM transcripts WHERE id = 'a'").fetch_one(&pool).await.unwrap();
-        assert_eq!(kept, earlier);
-        assert_eq!(undo_last(&pool, "m1").await.unwrap().as_deref(), Some("усе"));
-        let progress = crate::speakers::lines::progress(&pool, "m1").await.unwrap();
-        assert_eq!(progress.reviewed, 1);
-        assert_eq!(history(&pool, "m1").await.unwrap().undo, None);
+        let kind = |pool: SqlitePool| async move {
+            sqlx::query_scalar::<_, Option<String>>("SELECT review_kind FROM transcripts WHERE id = 'a'").fetch_one(&pool).await.unwrap()
+        };
+        journaled(&pool, "m1", "позначка «перевірено»", || async { ok(set_reviewed(&pool, "m1", &["a".to_string()], Some(ReviewKind::Heard)).await).await }).await.unwrap();
+        assert_eq!(kind(pool.clone()).await.as_deref(), Some("heard"));
+        undo_last(&pool, "m1").await.unwrap();
+        assert_eq!(kind(pool.clone()).await, None);
+        redo_last(&pool, "m1").await.unwrap();
+        assert_eq!(kind(pool.clone()).await.as_deref(), Some("heard"));
+        let span: Option<String> = sqlx::query_scalar("SELECT kind FROM segment_reviews WHERE meeting_id = 'm1'").fetch_one(&pool).await.unwrap();
+        assert_eq!(span.as_deref(), Some("heard"));
     }
 
     #[tokio::test]
@@ -500,7 +505,7 @@ mod tests {
         let cut = capture(&pool, "m1").await.unwrap();
         assert_eq!(cut.lines.len(), 3);
         // Checked, then a text fix
-        journaled(&pool, "m1", "позначка «перевірено»", || async { ok(crate::speakers::lines::set_reviewed(&pool, "m1", &["b".to_string()], true).await).await }).await.unwrap();
+        journaled(&pool, "m1", "позначка «перевірено»", || async { ok(crate::speakers::lines::set_reviewed(&pool, "m1", &["b".to_string()], Some(crate::speakers::lines::ReviewKind::Marked)).await).await }).await.unwrap();
         journaled(&pool, "m1", "виправлення тексту", || async { crate::ukrainian::commands::edit_line_with(&pool, "m1", "b", "Дякую, далі зв'язок і пальне").await.map(|_| ()) }).await.unwrap();
         // Two voices made one
         journaled(&pool, "m1", "об'єднання голосів", || async { ok(crate::speakers::commands::merge_with(&pool, "m1", "Тарас", "Остап").await).await }).await.unwrap();

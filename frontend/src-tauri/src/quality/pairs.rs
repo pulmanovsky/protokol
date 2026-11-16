@@ -2,8 +2,9 @@
 //! text: what a measurement compares recognition with, and what a training
 //! run learns from.
 //!
-//! A line counts when the secretary has checked it (read, fixed or marked
-//! «перевірено») and it is not left out of the document. Consecutive checked
+//! A line counts when the secretary has checked it himself (read, listened
+//! through, fixed or marked «перевірено»; not marked all at once) and it is
+//! not left out of the document. Consecutive checked
 //! lines are joined into pieces of up to 25 s; a longer line is cut between
 //! its words. A line that is not checked breaks the run, so a piece never
 //! holds text nobody looked at.
@@ -123,7 +124,10 @@ pub fn pieces_of(lines: &[Line]) -> Vec<Piece> {
 /// The checked lines of a meeting with where their words sound
 pub async fn lines_of(pool: &SqlitePool, meeting_id: &str) -> Result<Vec<Line>> {
     let words = crate::speakers::lines::line_words(pool, meeting_id).await?;
-    let checked: HashSet<String> = sqlx::query_scalar::<_, String>("SELECT id FROM transcripts WHERE meeting_id = ? AND reviewed_at IS NOT NULL")
+    // Only lines the secretary checked himself: a line marked all at once is
+    // what recognition wrote, and would teach and judge in its favour
+    let sql = format!("SELECT id FROM transcripts WHERE meeting_id = ? AND {}", crate::speakers::lines::CHECKED_BY_HAND);
+    let checked: HashSet<String> = sqlx::query_scalar::<_, String>(&sql)
         .bind(meeting_id)
         .fetch_all(pool)
         .await?

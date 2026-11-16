@@ -6,7 +6,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from '@/lib/notice';
-import { CheckCheck, ChevronLeft, ChevronRight, Copy, Volume2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Copy, Volume2 } from 'lucide-react';
 import { copySpeakerText } from '@/lib/copySpeaker';
 import { snippetRange } from '@/lib/snippet';
 import { Transcript } from '@/types';
@@ -14,7 +14,7 @@ import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 import { SpeakerPicker, SpeakerScope } from './SpeakerPicker';
 import { Timeline, TimelineLine } from './Timeline';
 import { speakerColorMap, isUnnamed } from '@/lib/speakerColors';
-import { JUMP_TO_TIME_EVENT, MARK_ALL_REVIEWED_EVENT, LINE_CHANGED_EVENT, mmss, playRange } from '@/lib/timeline';
+import { JUMP_TO_TIME_EVENT, LINE_CHANGED_EVENT, mmss, playRange } from '@/lib/timeline';
 import { followPlayhead, readPlayhead } from '@/lib/playhead';
 import { perfAdd, perfCount, perfOn } from '@/lib/perf';
 import { WORD_HIGHLIGHT_EVENT, effectiveRows } from '@/lib/lineTimes';
@@ -624,10 +624,12 @@ export function TranscriptWorkspace({
   }, []);
   const flush = () => (document.activeElement as HTMLElement | null)?.closest?.('.tv-text') && (document.activeElement as HTMLElement).blur();
 
+  // How a line was checked is kept: only lines read, listened through,
+  // fixed or marked one by one teach and judge the speech recognition
   const markReviewed = useCallback(
-    async (ids: string[], quiet = true) => {
+    async (ids: string[], how: 'read' | 'heard' | 'edited' | 'marked', quiet = true) => {
       if (ids.length === 0) return;
-      const p = await invoke<Progress>('set_segments_reviewed', { meetingId, segmentIds: ids, reviewed: true, quiet }).catch(() => null);
+      const p = await invoke<Progress>('set_segments_reviewed', { meetingId, segmentIds: ids, reviewed: true, quiet, how }).catch(() => null);
       if (p) setProgress(p);
     },
     [meetingId],
@@ -707,7 +709,7 @@ export function TranscriptWorkspace({
       }
       if (done.length === 0) return;
       setReadIds((prev) => new Set([...prev, ...done]));
-      void markReviewed(done);
+      void markReviewed(done, 'read');
     }, READ_TICK_MS);
     return () => window.clearInterval(timer);
   }, [markReviewed]);
@@ -721,7 +723,7 @@ export function TranscriptWorkspace({
     async (id: string, text: string, finished: boolean, before?: string) => {
       try {
         const pairs = await invoke<{ wrong: string; right: string; remembered: boolean }[]>('api_edit_transcript_line', { meetingId, segmentId: id, text, finished, before });
-        await markReviewed([id]);
+        await markReviewed([id], 'edited');
         // A rule made from this fix: the rest of the meeting is corrected too
         const made = pairs.filter((p) => p.remembered);
         if (made.length) {
@@ -794,24 +796,6 @@ export function TranscriptWorkspace({
     },
     [meetingId, refresh, undo],
   );
-
-  // «Позначити все перевіреним»: one step, undone from the notice too
-  const markAllReviewed = useCallback(async () => {
-    flush();
-    const p = await invoke<Progress>('api_mark_all_reviewed', { meetingId }).catch((e) => {
-      toast.error(`${e}`);
-      return null;
-    });
-    if (!p) return;
-    setProgress(p);
-    await refresh();
-    toast('Усі рядки позначено перевіреними', { action: { label: 'Скасувати', onClick: () => void undo() } });
-  }, [meetingId, refresh, undo]);
-  useEffect(() => {
-    const onAsk = () => void markAllReviewed();
-    window.addEventListener(MARK_ALL_REVIEWED_EVENT, onAsk);
-    return () => window.removeEventListener(MARK_ALL_REVIEWED_EVENT, onAsk);
-  }, [markAllReviewed]);
 
   // «Хто це сказав?» for words chosen with the mouse (or by the check queue)
   type Chosen = { from: { rowId: string; w: number }; to: { rowId: string; w: number }; rect: DOMRect; likely?: string };
@@ -1254,7 +1238,7 @@ export function TranscriptWorkspace({
         const row = t?.closest('[data-row]')?.getAttribute('data-row');
         if (row) {
           e.preventDefault();
-          void markReviewed([row], false).then(() => refresh());
+          void markReviewed([row], 'marked', false).then(() => refresh());
         }
         return;
       }
@@ -1426,7 +1410,7 @@ export function TranscriptWorkspace({
         if (t >= row.start - 0.3 && t <= row.start + 1 && !heardFrom.current.has(row.id)) heardFrom.current.set(row.id, t);
         if (heardFrom.current.has(row.id) && t >= row.end - 0.2 && !row.reviewed) {
           heardFrom.current.delete(row.id);
-          void markReviewed([row.id]);
+          void markReviewed([row.id], 'heard');
         }
       }
     }
@@ -1554,11 +1538,6 @@ export function TranscriptWorkspace({
               <ChevronRight className="h-4 w-4" />
             </button>
           </div>
-        )}
-        {progress && progress.reviewed < progress.total && (
-          <button type="button" className="tv-icon" aria-label="Позначити все перевіреним" title={`Позначити все перевіреним · зараз ${progress.reviewed} з ${progress.total}`} onClick={() => void markAllReviewed()}>
-            <CheckCheck className="h-4 w-4" />
-          </button>
         )}
         {autoCount > 0 && (
           <span className="tv-chip-auto" title="Ці слова виправлено за вашими правилами; їх підкреслено пунктиром">

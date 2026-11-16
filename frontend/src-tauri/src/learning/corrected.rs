@@ -75,9 +75,9 @@ pub fn run_date(id: &str) -> Option<String> {
 }
 
 pub async fn quality(pool: &sqlx::SqlitePool, models: &Path, model_file: &str) -> Result<Quality> {
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT DISTINCT m.id, m.created_at FROM meetings m JOIN transcripts t ON t.meeting_id = m.id WHERE t.reviewed_at IS NOT NULL ORDER BY m.created_at DESC",
-    )
+    let checked = crate::speakers::lines::CHECKED_BY_HAND;
+    let sql = format!("SELECT DISTINCT m.id, m.created_at FROM meetings m JOIN transcripts t ON t.meeting_id = m.id WHERE {checked} ORDER BY m.created_at DESC");
+    let rows: Vec<(String, String)> = sqlx::query_as(&sql)
     .fetch_all(pool)
     .await?;
     let changes = super::versions::changes(models);
@@ -90,7 +90,7 @@ pub async fn quality(pool: &sqlx::SqlitePool, models: &Path, model_file: &str) -
         let Some(at) = parse_time(&created_at) else { continue };
         let left_out = crate::speakers::lines::excluded_ids(pool, &id).await?;
         let lines: Vec<(String, Option<String>, Option<String>)> =
-            sqlx::query_as("SELECT id, transcript, original_transcript FROM transcripts WHERE meeting_id = ? AND reviewed_at IS NOT NULL")
+            sqlx::query_as(&format!("SELECT id, transcript, original_transcript FROM transcripts WHERE meeting_id = ? AND {checked}"))
                 .bind(&id)
                 .fetch_all(pool)
                 .await?;

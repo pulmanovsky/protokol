@@ -1,11 +1,18 @@
 //! What a run learns from and what it is checked on.
 //!
-//! Only checked lines count (read, fixed or marked «перевірено», not left
-//! out of the document), cut into pieces of the recording by
+//! Only lines checked by hand count (read, listened through, fixed or marked
+//! «перевірено»; not marked all at once, not left out of the document), cut
+//! into pieces of the recording by
 //! [`crate::quality::pairs`]. The newest checked meetings are held out:
 //! the run never sees them, and the new model is judged on them. Pieces the
 //! user rewrote rather than corrected (more than half the words differ from
 //! what was recognised) are left out of training, as in the pilot.
+//!
+//! Meetings recorded before 0.4.0 are left out altogether: until then every
+//! learned correction changed the text by itself, also where the word was
+//! right, and what nobody put back stayed in the checked text. A model
+//! trained on those meetings learned the damage and was judged on newer
+//! meetings without it, so a new model came out worse than the one in use.
 
 use std::path::{Path, PathBuf};
 
@@ -21,6 +28,19 @@ pub const MAX_TRAIN_HOURS: f64 = 10.0;
 /// A piece whose checked text differs from the recognised one in more than
 /// this share of words was rewritten, not corrected
 pub const MAX_REWRITE: f64 = 0.5;
+/// Meetings recorded from this moment on are learned from: 0.4.0 was
+/// published then, and from 0.4.0 only names and abbreviations change by
+/// themselves
+pub const LEARN_FROM: &str = "2026-11-15T21:33:00Z";
+/// How checked speech is counted for learning. A run made under an older
+/// count says nothing about how much of the speech is new now.
+pub const DATA_RULE: u32 = 1;
+
+/// Whether a meeting recorded at `created_at` is learned from
+pub fn recorded_to_learn_from(created_at: &str) -> bool {
+    let from = chrono::DateTime::parse_from_rfc3339(LEARN_FROM).expect("LEARN_FROM").with_timezone(&chrono::Utc);
+    super::corrected::parse_time(created_at).is_some_and(|t| t >= from)
+}
 
 /// A meeting with checked speech
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -143,15 +163,18 @@ pub async fn recording(pool: &sqlx::SqlitePool, meeting_id: &str) -> Result<Vec<
     tokio::task::spawn_blocking(move || crate::speakers::commands::decode_16k(&audio)).await?
 }
 
-/// Every meeting with checked lines and how much checked speech it has
+/// Every meeting to learn from (see [`LEARN_FROM`]) with checked lines and
+/// how much checked speech it has
 pub async fn meetings(pool: &sqlx::SqlitePool) -> Result<Vec<Meeting>> {
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT DISTINCT m.id, m.created_at FROM meetings m JOIN transcripts t ON t.meeting_id = m.id WHERE t.reviewed_at IS NOT NULL ORDER BY m.created_at",
-    )
+    let sql = format!(
+        "SELECT DISTINCT m.id, m.created_at FROM meetings m JOIN transcripts t ON t.meeting_id = m.id WHERE {} ORDER BY m.created_at",
+        crate::speakers::lines::CHECKED_BY_HAND
+    );
+    let rows: Vec<(String, String)> = sqlx::query_as(&sql)
     .fetch_all(pool)
     .await?;
     let mut out = Vec::new();
-    for (id, created_at) in rows {
+    for (id, created_at) in rows.into_iter().filter(|(_, at)| recorded_to_learn_from(at)) {
         let pieces = crate::quality::pairs::checked_pieces(pool, &id).await?;
         let checked_s: f64 = pieces.iter().map(|p| p.end - p.start).sum();
         if checked_s > 0.0 {
@@ -195,6 +218,15 @@ mod tests {
         let s = split(&many).unwrap();
         assert!(s.train_hours >= MAX_TRAIN_HOURS && s.train_hours <= MAX_TRAIN_HOURS + 1.0, "{}", s.train_hours);
         assert_eq!(s.train[0], "m26", "the newest meetings are trained on first");
+    }
+
+    #[test]
+    fn meetings_recorded_before_0_4_0_are_not_learned_from() {
+        assert!(!recorded_to_learn_from("2026-11-14T09:00:00Z"));
+        assert!(!recorded_to_learn_from("2026-11-15T21:00:00+00:00"));
+        assert!(recorded_to_learn_from("2026-11-16T07:30:00.123+00:00"));
+        assert!(recorded_to_learn_from("2026-11-16 09:30:00"));
+        assert!(!recorded_to_learn_from("не дата"));
     }
 
     #[test]
