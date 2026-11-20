@@ -578,6 +578,8 @@ pub fn run() {
                         log::warn!("ModelManager will be lazy-initialized on first use");
                     }
                 }
+                // Gemma 4 for the document on Macs with 24 GB or more (switch once, download in the background)
+                summary::summary_engine::preferred::at_startup(app_handle_for_model_manager).await;
             });
 
             // Trigger system audio permission request on startup (similar to microphone permission)

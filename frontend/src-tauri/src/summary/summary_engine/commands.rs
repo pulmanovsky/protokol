@@ -11,16 +11,23 @@ use super::model_manager::{DownloadProgress, ModelInfo, ModelManager};
 
 pub(crate) fn summary_model_priority(model_name: &str) -> u8 {
     match model_name {
+        "gemma4:26b" => 3,
         "mamaylm:12b" => 2,
         "gemma3:12b" => 1,
         _ => 0,
     }
 }
 
-pub(crate) fn recommend_summary_model(_is_macos: bool, _system_ram_gb: u64) -> &'static str {
-    // MamayLM 12B (~7 GB) is the only recommendation: smaller models were dropped
-    // because they cannot write a usable Ukrainian protocol.
-    "mamaylm:12b"
+pub(crate) fn recommend_summary_model(is_macos: bool, system_ram_gb: u64) -> &'static str {
+    // Gemma 4 26B (~14 GB) on Macs with room for it: in the 18.11 blind test it wrote
+    // speaker summaries as well as MamayLM, the overall summary better (4 of 4), and
+    // 2.4 times faster. Smaller Macs keep MamayLM 12B (~7 GB); models under 12B were
+    // dropped because they cannot write a usable Ukrainian protocol.
+    if is_macos && system_ram_gb >= super::models::GEMMA4_MIN_RAM_GB {
+        super::models::GEMMA4_MODEL
+    } else {
+        super::models::MAMAYLM_MODEL
+    }
 }
 
 pub(crate) fn get_recommended_summary_model_for_current_system() -> Result<&'static str, String> {
@@ -87,7 +94,12 @@ pub async fn builtin_ai_list_models<R: Runtime>(
             .clone()
     };
 
-    let models = manager.list_models().await;
+    let mut models = manager.list_models().await;
+    // Gemma 4 needs ~14 GB while it writes: a smaller Mac is not offered it
+    // (unless its file is already there)
+    if !super::preferred::gemma4_preferred_here() {
+        models.retain(|m| m.name != super::models::GEMMA4_MODEL || matches!(m.status, super::model_manager::ModelStatus::Available));
+    }
     Ok(models)
 }
 
@@ -288,7 +300,13 @@ pub async fn builtin_ai_is_model_ready<R: Runtime>(
     };
 
     let refresh_scan = refresh.unwrap_or(false);
-    let ready = manager.is_model_ready(&model_name, refresh_scan).await;
+    let mut ready = manager.is_model_ready(&model_name, refresh_scan).await;
+    // Gemma 4 still downloading (or never downloaded): its fallback MamayLM writes the document
+    if !ready {
+        if let Some(fallback) = super::models::fallback_model(&model_name) {
+            ready = manager.is_model_ready(fallback, false).await;
+        }
+    }
 
     log::info!(
         "Model '{}' ready check (refresh={}): {}",
@@ -377,10 +395,8 @@ pub async fn init_model_manager_at_startup<R: Runtime>(
 }
 
 
-/// Get recommended summary model based on platform and system RAM.
-/// macOS → qwen3.5:4b
-/// non-macOS + <8GB RAM → qwen3.5:2b
-/// non-macOS + >=8GB RAM → qwen3.5:4b
+/// Get recommended summary model based on platform and system RAM:
+/// a Mac with 24 GB or more → Gemma 4 26B, anything else → MamayLM 12B
 #[tauri::command]
 pub async fn builtin_ai_get_recommended_model() -> Result<String, String> {
     let recommended = get_recommended_summary_model_for_current_system()?;
@@ -390,7 +406,7 @@ pub async fn builtin_ai_get_recommended_model() -> Result<String, String> {
 }
 
 /// Get total system RAM in gigabytes
-fn get_system_ram_gb() -> Result<u64, String> {
+pub(crate) fn get_system_ram_gb() -> Result<u64, String> {
     use sysinfo::System;
 
     let mut sys = System::new_all();
@@ -407,14 +423,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mamaylm_is_recommended_on_every_system() {
-        for ram in [8, 16, 24, 64] {
+    fn gemma4_is_recommended_on_macs_with_24_gb_or_more() {
+        for ram in [8, 16, 23] {
             assert_eq!(recommend_summary_model(true, ram), "mamaylm:12b");
         }
+        for ram in [24, 32, 64] {
+            assert_eq!(recommend_summary_model(true, ram), "gemma4:26b");
+        }
+        assert_eq!(recommend_summary_model(false, 64), "mamaylm:12b");
     }
 
     #[test]
-    fn summary_model_priority_prefers_mamaylm() {
+    fn summary_model_priority_prefers_gemma4_then_mamaylm() {
+        assert!(summary_model_priority("gemma4:26b") > summary_model_priority("mamaylm:12b"));
         assert!(summary_model_priority("mamaylm:12b") > summary_model_priority("gemma3:12b"));
         assert!(summary_model_priority("gemma3:12b") > summary_model_priority("qwen3.5:4b"));
     }

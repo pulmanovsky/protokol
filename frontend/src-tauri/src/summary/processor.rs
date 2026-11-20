@@ -1080,15 +1080,15 @@ async fn speaker_blocks_document(
         }
         done += 1;
         let stage = format!("Report summary {done}/{total}");
-        let spoken_words = working.iter().map(|l| l.1.split_whitespace().count()).sum();
-        let points = if spec.detailed { materials::points_for_detailed(spoken_words) } else { materials::points_for(spoken_words) };
+        let points = materials::points_for_speech(&working, spec.detailed);
+        let short = materials::is_short_speech(&working);
         let pieces = materials::lines_for_model(&working, BLOCK_PIECE_TOKENS);
         let per_piece = points.div_ceil(pieces.len().max(1));
         let mut written = Vec::new();
         let mut answered = false;
         let mut missed = false;
         for piece in pieces {
-            let prompt = materials::speaker_block_prompt(&block.speaker, &piece, per_piece, spec.detailed);
+            let prompt = materials::speaker_block_prompt(&block.speaker, &piece, per_piece, spec.detailed, short);
             match tokio::time::timeout(REPORT_SUMMARY_TIMEOUT, llm.complete_with_retry(system, &prompt, &stage)).await {
                 Ok(Ok(a)) if !a.markdown.trim().is_empty() => {
                     reasoning_stripped |= a.reasoning_stripped;
@@ -1117,9 +1117,14 @@ async fn speaker_blocks_document(
             kept.push(block.speaker.clone());
         }
         let said = super::numbers::Said::of(&block.lines.iter().map(|l| l.1.as_str()).collect::<Vec<_>>().join(" "));
-        let (whole, kept) = materials::keep_numbers(&materials::clean_points(&written.join("\n")), &working);
+        let (points, kept) = materials::keep_numbers(&materials::clean_points(&written.join("\n")), &working);
+        // A short report loses nothing the model left out
+        let (points, back) = materials::keep_said_facts(&points, &working);
+        if back > 0 {
+            info!("Speaker block: {back} said sentence(s) no point carried came back as said");
+        }
         // In the order it was said (a point from the middle of a report stays in the middle)
-        let whole = materials::in_said_order(&whole);
+        let whole = materials::landmark_names(&materials::in_said_order(&points));
         numbers.appended += kept.appended;
         numbers.added += kept.added;
         numbers.left += kept.left;
@@ -1168,19 +1173,30 @@ async fn speaker_blocks_document(
         // The very longest meetings keep to what fits
         let cap = (OVERALL_SOURCE_TOKENS as f64 / 0.35) as usize;
         let source: String = all.chars().take(cap).collect();
-        let (_, most) = materials::overall_points(spec.detailed);
-        overall = match llm.complete_with_retry(system, &materials::overall_summary_prompt(&source, spec.detailed), "Overall summary").await {
-            Ok(a) => {
-                reasoning_stripped |= a.reasoning_stripped;
-                let (text, marked) = materials::mark_unbacked_numbers(&materials::as_points(&a.markdown, most), &all_said, &all_said);
-                unbacked += marked;
-                text
-            }
-            Err(e) if llm.is_cancelled() => return Err(e),
-            Err(e) => {
-                warn!("Overall summary failed: {e}");
+        let substance = materials::substance_words(lines);
+        overall = match materials::overall_points_for(substance, spec.detailed) {
+            // Next to nothing said: no summary rather than an invented one
+            None => {
+                info!("Overall summary left out: {substance} word(s) of substance");
                 String::new()
             }
+            Some((least, most)) => match llm.complete_with_retry(system, &materials::overall_summary_prompt(&source, least, most), "Overall summary").await {
+                Ok(a) => {
+                    reasoning_stripped |= a.reasoning_stripped;
+                    let (points, dropped) = materials::keep_backed_points(&materials::landmark_names(&materials::as_points(&a.markdown, most)), &materials::backing_stems(&everything));
+                    if dropped > 0 {
+                        warn!("Overall summary: {dropped} point(s) not backed by the transcript left out");
+                    }
+                    let (text, marked) = materials::mark_unbacked_numbers(&points, &all_said, &all_said);
+                    unbacked += marked;
+                    text
+                }
+                Err(e) if llm.is_cancelled() => return Err(e),
+                Err(e) => {
+                    warn!("Overall summary failed: {e}");
+                    String::new()
+                }
+            },
         };
     }
     let control = if has("Контроль") { control_of_earlier(llm, system, custom_prompt, lines).await } else { Vec::new() };
@@ -1565,14 +1581,24 @@ async fn generate_materials(
         };
         let cap = (OVERALL_SOURCE_TOKENS as f64 / 0.35) as usize;
         let source: String = all.chars().take(cap).collect();
-        let (_, most) = materials::overall_points(spec.detailed);
-        match llm.complete_with_retry(&system, &materials::overall_summary_prompt(&source, spec.detailed), "Overall summary").await {
-            Ok(a) => {
-                reasoning_stripped |= a.reasoning_stripped;
-                overall = materials::as_points(&a.markdown, most);
+        let substance = materials::substance_words(&lines);
+        // Next to nothing said: no summary rather than an invented one
+        if let Some((least, most)) = materials::overall_points_for(substance, spec.detailed) {
+            match llm.complete_with_retry(&system, &materials::overall_summary_prompt(&source, least, most), "Overall summary").await {
+                Ok(a) => {
+                    reasoning_stripped |= a.reasoning_stripped;
+                    let everything = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" ");
+                    let (points, dropped) = materials::keep_backed_points(&materials::landmark_names(&materials::as_points(&a.markdown, most)), &materials::backing_stems(&everything));
+                    if dropped > 0 {
+                        warn!("Overall summary: {dropped} point(s) not backed by the transcript left out");
+                    }
+                    overall = points;
+                }
+                Err(e) if llm.is_cancelled() => return Err(e),
+                Err(e) => warn!("Overall summary failed: {e}"),
             }
-            Err(e) if llm.is_cancelled() => return Err(e),
-            Err(e) => warn!("Overall summary failed: {e}"),
+        } else {
+            info!("Overall summary left out: {substance} word(s) of substance");
         }
     }
     let date = materials::date_from_facts(custom_prompt);

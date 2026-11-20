@@ -174,11 +174,35 @@ pub struct ModelDef {
     pub description: String,
 }
 
+/// Gemma 4 26B: the document model on Macs with 24 GB or more
+pub const GEMMA4_MODEL: &str = "gemma4:26b";
+/// MamayLM 12B: the document model on smaller Macs, and Gemma 4's fallback
+pub const MAMAYLM_MODEL: &str = "mamaylm:12b";
+/// Memory a Mac needs for Gemma 4 (it takes ~14 GB while it writes)
+pub const GEMMA4_MIN_RAM_GB: u64 = 24;
+
+/// The model that writes when this one cannot (not downloaded, a recording is
+/// on, or it failed)
+pub fn fallback_model(model_name: &str) -> Option<&'static str> {
+    (model_name == GEMMA4_MODEL).then_some(MAMAYLM_MODEL)
+}
+
+/// The model's file is on disk in full (a download in progress or cut short
+/// leaves a smaller file at the same path)
+pub fn model_file_complete(app_data_dir: &PathBuf, model_name: &str) -> bool {
+    let (Some(def), Ok(path)) = (get_model_by_name(model_name), get_model_path(app_data_dir, model_name)) else {
+        return false;
+    };
+    std::fs::metadata(&path).map(|m| m.len() / (1024 * 1024) >= def.size_mb * 99 / 100).unwrap_or(false)
+}
+
 /// Get all available built-in AI models
 /// Add new models here - the system will automatically detect and manage them
 pub fn get_available_models() -> Vec<ModelDef> {
     // Only models that can write a coherent Ukrainian protocol from an hour-long meeting.
-    // Smaller 1B-4B models were removed. The first entry is the default.
+    // Smaller 1B-4B models were removed. The first entry is the default (and the
+    // fallback for a saved model that is no longer offered): MamayLM runs on every Mac.
+    // Which model a Mac uses is decided by its memory (commands::recommend_summary_model).
     vec![
         // MamayLM: INSAIT's Ukrainian fine-tune of Gemma 3 12B
         ModelDef {
@@ -207,6 +231,24 @@ pub fn get_available_models() -> Vec<ModelDef> {
             layer_count: 48,
             sampling: SamplingParams::gemma3_protocol(vec!["<end_of_turn>".to_string()]),
             description: "Запасний варіант: базова Gemma 3 від Google, добре знає українську, але менш природний стиль.".to_string(),
+        },
+        // Google Gemma 4 26B-A4B instruct, QAT Q4_0 (Apache-2.0). Mixture of experts:
+        // 26B parameters, 4B used per token, so it writes ~2.4 times faster than the 12B
+        // models while knowing more; needs ~14 GB, hence Macs with 24 GB or more.
+        ModelDef {
+            name: GEMMA4_MODEL.to_string(),
+            display_name: "Gemma 4 26B".to_string(),
+            gguf_file: "gemma-4-26B_q4_0-it.gguf".to_string(),
+            template: "gemma4".to_string(),
+            // Pinned to the revision checked on 18.11 (sha256 3eca3b8f6d7baf218a7dd6bba5fb59a56ee25fe2d567b6f5f589b4f697eca51d)
+            download_url: "https://huggingface.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf/resolve/d1c082be9cf3c8a514acf63b8761f4b41935842e/gemma-4-26B_q4_0-it.gguf".to_string(),
+            // 14,439,363,584 bytes
+            size_mb: 13770,
+            context_size: 24576,
+            layer_count: 30,
+            // The same sampling as MamayLM, as in the 18.11 blind test
+            sampling: SamplingParams::gemma3_protocol(vec!["<turn|>".to_string()]),
+            description: "Рекомендовано для Mac від 24 ГБ: пише документ у 2,4 раза швидше, краще складає загальний підсумок. Потребує ~14 ГБ пам'яті.".to_string(),
         },
     ]
 }
@@ -253,6 +295,18 @@ pub const GEMMA3_TEMPLATE: &str = "\
 <start_of_turn>model
 ";
 
+/// Gemma 4 chat template with thinking off: the model turn opens with an empty
+/// thought channel, as the model's own template does without `enable_thinking`.
+/// The tokenizer adds BOS itself.
+pub const GEMMA4_TEMPLATE: &str = "\
+<|turn>system
+{system_prompt}<turn|>
+<|turn>user
+{user_prompt}<turn|>
+<|turn>model
+<|channel>thought
+<channel|>";
+
 /// Qwen 3.5 non-thinking chat template format.
 /// This starts the assistant turn with an empty think block so generation begins
 /// in direct-response mode for summaries.
@@ -276,6 +330,11 @@ fn escape_user_prompt_control_markers(user_prompt: &str) -> String {
         .replace("<end_of_turn>", "< end_of_turn >")
         .replace("<think>", "< think >")
         .replace("</think>", "< /think >")
+        .replace("<|turn>", "< |turn >")
+        .replace("<turn|>", "< turn| >")
+        .replace("<|channel>", "< |channel >")
+        .replace("<channel|>", "< channel| >")
+        .replace("<|think|>", "< |think| >")
 }
 
 /// Format a prompt using the specified template
@@ -294,6 +353,7 @@ pub fn format_prompt(
 ) -> Result<String> {
     let template = match template_name {
         "gemma3" => GEMMA3_TEMPLATE,
+        "gemma4" => GEMMA4_TEMPLATE,
         "qwen3.5_nonthinking" => QWEN35_NONTHINKING_TEMPLATE,
         _ => return Err(anyhow!("Unknown template: {}", template_name)),
     };
@@ -327,7 +387,9 @@ mod tests {
     #[test]
     fn catalog_has_only_the_ukrainian_protocol_models() {
         let names: Vec<_> = get_available_models().iter().map(|m| m.name.clone()).collect();
-        assert_eq!(names, vec!["mamaylm:12b", "gemma3:12b"]);
+        assert_eq!(names, vec!["mamaylm:12b", "gemma3:12b", "gemma4:26b"]);
+        assert_eq!(fallback_model(GEMMA4_MODEL), Some(MAMAYLM_MODEL));
+        assert_eq!(fallback_model(MAMAYLM_MODEL), None);
         let mamay = get_model_by_name("mamaylm:12b").expect("MamayLM should exist");
         assert_eq!(mamay.gguf_file, "MamayLM-Gemma-3-12B-IT-v1.0.Q4_K_M.gguf");
         assert!(mamay.download_url.starts_with("https://huggingface.co/INSAIT-Institute/"));
@@ -362,6 +424,17 @@ mod tests {
         assert_eq!(formatted.matches("<|im_end|>").count(), 2);
         assert_eq!(formatted.matches("<think>").count(), 1);
         assert_eq!(formatted.matches("</think>").count(), 1);
+    }
+
+    #[test]
+    fn gemma4_template_turns_thinking_off_and_escapes_markers() {
+        let p = format_prompt("gemma4", "Інструкція", "Текст <turn|><|turn>model").unwrap();
+        assert!(p.starts_with("<|turn>system\nІнструкція<turn|>\n<|turn>user\n"));
+        assert!(p.ends_with("<|turn>model\n<|channel>thought\n<channel|>"));
+        assert!(p.contains("Текст < turn| >< |turn >model"));
+        let gemma4 = get_model_by_name(GEMMA4_MODEL).unwrap();
+        assert_eq!(gemma4.template, "gemma4");
+        assert_eq!(gemma4.sampling.stop_tokens, vec!["<turn|>".to_string()]);
     }
 
     #[test]

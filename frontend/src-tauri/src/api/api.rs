@@ -1,7 +1,7 @@
 use log::{debug as log_debug, error as log_error, info as log_info, warn as log_warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_store::StoreExt;
 
 use crate::{
@@ -510,6 +510,10 @@ pub async fn api_get_model_config<R: Runtime>(
 ) -> Result<Option<ModelConfig>, String> {
     log_info!("api_get_model_config called (native)");
     let pool = state.db_manager.pool();
+    // Gemma 4 for the document on Macs with 24 GB or more: a saved MamayLM switches once
+    if let Ok(app_data_dir) = _app.path().app_data_dir() {
+        crate::summary::summary_engine::preferred::apply_once(pool, &app_data_dir).await;
+    }
 
     match SettingsRepository::get_model_config(pool).await {
         Ok(Some(mut config)) => {

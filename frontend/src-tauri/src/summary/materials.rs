@@ -1116,6 +1116,144 @@ pub(crate) fn overall_points(detailed: bool) -> (usize, usize) {
     if detailed { (8, 15) } else { (5, 10) }
 }
 
+/// Below this many words of substance there is nothing to sum up: a test
+/// recording («Раз-два, записую…») got ten invented points about supplies
+/// and fuel when the model was asked for five at least
+pub(crate) const OVERALL_MIN_WORDS: usize = 60;
+/// Said words per point of the overall summary
+const OVERALL_WORDS_PER_POINT: usize = 40;
+/// Share of a point's words that must have been said in the meeting
+pub(crate) const OVERALL_BACKED_SHARE: f64 = 0.5;
+
+/// Words of substance in the whole meeting: no greetings, roll calls,
+/// thanks or remarks about sound
+pub(crate) fn substance_words(lines: &[Line]) -> usize {
+    lines
+        .iter()
+        .flat_map(|l| l.text.split_inclusive(['.', '!', '?', '…']))
+        .filter(|s| !is_service_remark(s))
+        .map(|s| s.split_whitespace().count())
+        .sum()
+}
+
+/// How many points the overall summary may have for a meeting of `words`
+/// words of substance: none when next to nothing was said, fewer for a
+/// short meeting (a minimum the meeting cannot fill makes the model invent)
+pub(crate) fn overall_points_for(words: usize, detailed: bool) -> Option<(usize, usize)> {
+    if words < OVERALL_MIN_WORDS {
+        return None;
+    }
+    let (least, most) = overall_points(detailed);
+    let most = (words / OVERALL_WORDS_PER_POINT).clamp(2, most);
+    Some((least.min(most.div_ceil(2)), most))
+}
+
+/// Words a summary frames things with («обговорено», «повідомлено»,
+/// «питання щодо»…) and words too common to tell anything, by their first
+/// four letters
+const FRAMING_STEMS: &[&str] = &[
+    "обго", "пові", "зазн", "наго", "згад", "підн", "пита", "щодо", "зокр", "допо", "інфо", "учас", "нара", "тако", "було", "були", "була", "який", "того",
+    "цьог", "тому", "саме", "чере", "післ", "мене", "сьог",
+];
+
+/// What a text is about, for telling whether one text carries another: the
+/// first four letters of each word of four letters or more («прибуває» and
+/// «прибуття» meet), without the framing words
+pub(crate) fn backing_stems(text: &str) -> HashSet<String> {
+    text.to_lowercase()
+        .replace('’', "'")
+        .split(|c: char| !(c.is_alphabetic() || c == '\''))
+        .filter(|w| w.chars().count() >= 4)
+        .map(|w| w.chars().take(4).collect::<String>())
+        .filter(|s| !FRAMING_STEMS.contains(&s.as_str()))
+        .collect()
+}
+
+/// Share of `text`'s content words found in `source` (1 when it has none)
+pub(crate) fn backed_share(text: &str, source: &HashSet<String>) -> f64 {
+    let own = backing_stems(text);
+    if own.is_empty() {
+        return 1.0;
+    }
+    own.iter().filter(|s| source.contains(*s)).count() as f64 / own.len() as f64
+}
+
+/// The overall summary's points whose words were mostly said in the
+/// meeting; a point made up from the glossary or from nowhere goes.
+/// Returns the points kept and how many went.
+pub(crate) fn keep_backed_points(points: &str, said: &HashSet<String>) -> (String, usize) {
+    let mut dropped = 0;
+    let kept = points
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter(|l| {
+            let ok = backed_share(&without_source_marks(l), said) >= OVERALL_BACKED_SHARE;
+            dropped += usize::from(!ok);
+            ok
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (kept, dropped)
+}
+
+/// A short speech is told whole: up to this many points, one for each thing said
+const SHORT_SPEECH_MOST: usize = 6;
+/// Below this many words a said sentence no point carries comes back as said
+pub(crate) const SAID_FACTS_WORDS: usize = 60;
+/// Share of a sentence's words a point must carry for the sentence to count as told
+const TOLD_SHARE: f64 = 0.34;
+
+/// Sentences of a person's lines that say something: four words or more,
+/// not a greeting or a roll call
+fn said_sentences(lines: &[(u32, String)]) -> Vec<(u32, &str)> {
+    lines
+        .iter()
+        .flat_map(|(at, l)| l.split_inclusive(['.', '!', '?', '…']).map(move |s| (*at, s.trim())))
+        .filter(|(_, s)| s.split_whitespace().count() >= 4 && !is_service_remark(s) && !backing_stems(s).is_empty())
+        .collect()
+}
+
+/// How many points a person's block may have. A short speech is told whole:
+/// at least one point for each sentence that says something («Сьогодні
+/// прибуває один працівник. Вчора встановили сервери. Сьогодні
+/// облаштовуємо місця…» was cut to its first sentence when 28 words got one
+/// point).
+pub(crate) fn points_for_speech(working: &[(u32, String)], detailed: bool) -> usize {
+    let words = working.iter().map(|l| l.1.split_whitespace().count()).sum();
+    let by_words = if detailed { points_for_detailed(words) } else { points_for(words) };
+    if words < SHORT_SPEECH_WORDS {
+        by_words.max(said_sentences(working).len().min(SHORT_SPEECH_MOST))
+    } else {
+        by_words
+    }
+}
+
+/// Whether a person's speech is short enough to be told whole
+pub(crate) fn is_short_speech(working: &[(u32, String)]) -> bool {
+    working.iter().map(|l| l.1.split_whitespace().count()).sum::<usize>() < SHORT_SPEECH_WORDS
+}
+
+/// A short speech loses nothing: a sentence that says something and that
+/// no point carries comes back as said, with its moment. Returns the points
+/// and how many sentences came back.
+pub(crate) fn keep_said_facts(points: &str, working: &[(u32, String)]) -> (String, usize) {
+    let words: usize = working.iter().map(|l| l.1.split_whitespace().count()).sum();
+    if words >= SAID_FACTS_WORDS {
+        return (points.to_string(), 0);
+    }
+    let told = backing_stems(&without_source_marks(points));
+    let mut out: Vec<String> = points.lines().filter(|l| !l.trim().is_empty()).map(str::to_string).collect();
+    let mut back = 0;
+    for (at, sentence) in said_sentences(working) {
+        if backed_share(sentence, &told) < TOLD_SHARE {
+            let text = clean_spoken(sentence);
+            out.push(format!("- {} [{}]", capitalised(text.trim_end_matches(['.', '!', '?', '…', ',', ' '])), mmss(at)));
+            back += 1;
+        }
+    }
+    (out.join("\n"), back)
+}
+
 /// «Докладніше»: half as many points again (twelve at most)
 pub(crate) fn points_for_detailed(words: usize) -> usize {
     (points_for(words) * 3).div_ceil(2).min(12)
@@ -1309,6 +1447,74 @@ fn clause_around(sentence: &str, number: &str, most: usize) -> String {
     }
 }
 
+/// Words that say nothing about the topic of a clause
+const NOT_TOPIC: &[&str] = &[
+    "було", "буде", "були", "була", "бути", "будуть", "також", "тому", "коли", "якщо", "який", "яка", "які", "яке", "якого", "якої",
+    "цього", "цей", "саме", "немає", "нема", "тобто", "тоді", "зараз", "сьогодні", "вчора", "далі", "потім", "щодо", "наші", "нашого",
+];
+
+/// Word stems of a text (words of 4+ letters, first 5 letters), time marks and numbers left out
+fn topic_stems(text: &str) -> HashSet<String> {
+    let text = text.split(" [").next().unwrap_or(text);
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphabetic())
+        .filter(|w| w.chars().count() >= 4 && !NOT_TOPIC.contains(w))
+        .map(|w| w.chars().take(5).collect())
+        .collect()
+}
+
+/// «орієнтир липа» → «орієнтир Липа»: the word after «орієнтир» (any
+/// case form) is the landmark's name, and «Орієнтир» inside a sentence (a
+/// clause copied from where it opened one) is written small
+pub(crate) fn landmark_names(text: &str) -> String {
+    text.lines().map(landmark_names_in_line).collect::<Vec<_>>().join("\n")
+}
+
+fn landmark_names_in_line(line: &str) -> String {
+    let is_landmark = |w: &str| w.trim_matches(|c: char| !c.is_alphabetic()).to_lowercase().starts_with("орієнтир");
+    let words: Vec<&str> = line.split(' ').collect();
+    let mut out: Vec<String> = Vec::with_capacity(words.len());
+    for (i, w) in words.iter().enumerate() {
+        let mut word = w.to_string();
+        let prev = if i > 0 { words[i - 1] } else { "" };
+        let opens = i == 0 || prev == "-" || prev.ends_with(['.', '!', '?', '…']) || prev.is_empty();
+        if is_landmark(w) && !opens && w.starts_with('О') {
+            word = format!("о{}", &w['О'.len_utf8()..]);
+        }
+        // «орієнтир для …», «орієнтиром є …»: a guide, not a place
+        const NOT_A_NAME: &[&str] = &["для", "на", "по", "до", "від", "що", "це", "є", "був", "була", "буде", "не", "та", "і", "й", "в", "у", "з", "із", "зі", "за", "при", "під", "над", "між", "біля", "якого", "який", "яка", "які"];
+        let bare = w.trim_matches(|c: char| !c.is_alphabetic()).to_lowercase();
+        if i > 0 && is_landmark(prev) && !prev.ends_with([',', '.', ';', ':']) && !NOT_A_NAME.contains(&bare.as_str()) {
+            if let Some(first) = w.chars().next() {
+                if first.is_lowercase() && first.is_alphabetic() {
+                    word = first.to_uppercase().chain(w.chars().skip(1)).collect();
+                }
+            }
+        }
+        out.push(word);
+    }
+    out.join(" ")
+}
+
+/// A clause and a point share a content word: they are about the same thing
+fn shares_topic(point: &str, clause: &str) -> bool {
+    !topic_stems(point).is_disjoint(&topic_stems(clause))
+}
+
+/// In `line`, `clause` comes before what `point` is about
+fn said_before(line: &str, clause: &str, point: &str) -> bool {
+    let lower = line.to_lowercase();
+    let clause_at = topic_stems(clause).iter().filter_map(|s| lower.find(s.as_str())).min();
+    let point_at = topic_stems(point).iter().filter_map(|s| lower.find(s.as_str())).min();
+    matches!((clause_at, point_at), (Some(c), Some(p)) if c < p)
+}
+
+/// A number that is part of a name («Липа-2», «М-20»), not a count
+fn in_a_name(text: &str, f: &super::numbers::Found) -> bool {
+    let before: Vec<char> = text.chars().take(f.start).collect();
+    matches!(before.as_slice(), [.., letter, '-'] if letter.is_alphabetic())
+}
+
 /// What became of the numbers a block had lost
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct NumbersKept {
@@ -1324,22 +1530,43 @@ pub(crate) fn keep_numbers(points: &str, lines: &[(u32, String)]) -> (String, Nu
     let mut out: Vec<String> = points.lines().map(str::to_string).collect();
     let mut grown = vec![0usize; out.len()];
     let mut kept = NumbersKept::default();
-    let written: HashSet<String> = extract(points).into_iter().flat_map(|f| f.keys).collect();
+    // Counts and numbers in names are kept apart: «2 цілі» is still lost when
+    // the points only have «Липа-2», and a lost «М-20» is not hidden by «20 машин»
+    let found = extract(points);
+    let written: HashSet<String> = found.iter().filter(|f| !in_a_name(points, f)).flat_map(|f| f.keys.clone()).collect();
+    let named: HashSet<String> = found.iter().filter(|f| in_a_name(points, f)).flat_map(|f| f.keys.clone()).collect();
     let mut seen: Vec<String> = Vec::new();
     for (at, line) in lines {
         let mark = format!(" [{}]", mmss(*at));
         for sentence in line.split_inclusive(['.', '!', '?', '…']) {
             for f in extract(sentence) {
                 // Numbers in digits: a word like «три» reads badly when stitched on
-                if !f.text.chars().any(|c| c.is_ascii_digit()) || is_rude(sentence) || f.keys.iter().any(|k| written.contains(k)) || seen.contains(&f.text) {
+                let already = if in_a_name(sentence, &f) { &named } else { &written };
+                if !f.text.chars().any(|c| c.is_ascii_digit()) || is_rude(sentence) || f.keys.iter().any(|k| already.contains(k)) || seen.contains(&f.text) {
                     continue;
                 }
                 seen.push(f.text.clone());
-                let place = out.iter().enumerate().position(|(i, p)| p.contains(&mark) && grown.get(i).copied().unwrap_or(NUMBERS_PER_POINT) < NUMBERS_PER_POINT);
                 let phrase = clause_around(sentence, &f.text, APPENDED_WORDS);
+                let open = |i: usize| out[i].contains(&mark) && grown.get(i).copied().unwrap_or(NUMBERS_PER_POINT) < NUMBERS_PER_POINT;
+                // The point from the same line that is about the same sentence. A
+                // line can carry two topics («На орієнтирі Липа 2 цілі. Здійснено
+                // 118 доставок.»): a number from a sentence about another one is
+                // not stitched onto it. The whole sentence counts, not the clause:
+                // «…, як ми це робили попередні 4,5 роки» belongs to its sentence
+                let related = (0..out.len()).find(|&i| open(i) && shares_topic(&out[i], sentence));
+                let same_line = (0..out.len()).find(|&i| open(i));
+                let unrelated = related.is_none() && same_line.is_some() && kept.added < NEW_NUMBER_POINTS;
                 // A whole thought too long to tack on is a point of its own
-                let own = phrase.split_whitespace().count() > APPENDED_WORDS && kept.added < NEW_NUMBER_POINTS;
-                if let (Some(i), false) = (place, own) {
+                let own = unrelated || (phrase.split_whitespace().count() > APPENDED_WORDS && kept.added < NEW_NUMBER_POINTS);
+                let place = related.or(same_line);
+                if let (Some(i), true) = (place, own && unrelated) {
+                    // Its own point, before the line's other point when it was said first
+                    let point = format!("- {}{mark}", capitalised(&clause_around(sentence, &f.text, 18)));
+                    let at = if said_before(line, &phrase, &out[i]) { i } else { i + 1 };
+                    out.insert(at, point);
+                    grown.insert(at, 0);
+                    kept.added += 1;
+                } else if let (Some(i), false) = (place, own) {
                     // Already there word for word (another number of the same clause)
                     if out[i].contains(&phrase) {
                         kept.appended += 1;
@@ -1363,22 +1590,27 @@ pub(crate) fn keep_numbers(points: &str, lines: &[(u32, String)]) -> (String, Nu
     (out.join("\n"), kept)
 }
 
-pub(crate) fn speaker_block_prompt(speaker: &str, said: &str, points: usize, detailed: bool) -> String {
+pub(crate) fn speaker_block_prompt(speaker: &str, said: &str, points: usize, detailed: bool, whole: bool) -> String {
     let (kind, words) = if detailed { ("докладний", 25) } else { ("стислий", 15) };
+    // A short report is a list of separate facts: merging them loses all but the first
+    let merge = if whole {
+        "Це коротка доповідь: кожне окреме повідомлення (хто прибуває чи вибуває, що виконано, що триває, що заплановано, чи є оголошення) — окремим пунктом; нічого сказаного по суті не пропускай. Повторів не пиши."
+    } else {
+        "Дрібне об'єднуй, повторів не пиши."
+    };
     format!(
         r#"Нижче все, що сказав на нараді один учасник ({speaker}): рядки стенограми усного мовлення з мітками часу.
 <said>
 {said}
 </said>
 
-Склади {kind} виклад сказаного: головне з доповіді, проблеми, пропозиції, завдання, які дано або взято (кому і який термін, лише якщо це названо). Дрібне об'єднуй, повторів не пиши.
+Склади {kind} виклад сказаного: головне з доповіді, проблеми, пропозиції, завдання, які дано або взято (кому і який термін, лише якщо це названо). {merge}
 Не більше {points} пунктів, кожен не довший за {words} слів, у форматі «- текст [ММ:СС]», де мітка часу — того рядка, де це прозвучало. Пункти в тому самому порядку, у якому це прозвучало: не переставляй сказане із середини в кінець.
 Кожен пункт — завершена думка, а не обірваний шматок речення. Пиши словами доповідача: не замінюй і не пропускай назв, псевдонімів, орієнтирів, населених пунктів, номерів підрозділів і техніки; числа пиши цифрами, дати й імена дослівно. Нічого не додавай від себе й не роби висновків. Не бери привітань, подяк, перекличок і реплік про звук. Не пиши вступу, заголовків чи імені доповідача. Виведи лише пункти українською."#
     )
 }
 
-pub(crate) fn overall_summary_prompt(blocks: &str, detailed: bool) -> String {
-    let (least, most) = overall_points(detailed);
+pub(crate) fn overall_summary_prompt(blocks: &str, least: usize, most: usize) -> String {
     format!(
         r#"Нижче виступи учасників наради, по порядку.
 <meeting>
@@ -1386,7 +1618,7 @@ pub(crate) fn overall_summary_prompt(blocks: &str, detailed: bool) -> String {
 </meeting>
 
 Напиши загальний підсумок наради: від {least} до {most} коротких пунктів, кожен з нового рядка, починаючи з «- ». Спочатку головні теми, потім рішення, далі завдання (хто відповідальний і термін, лише якщо це названо).
-Лише те, що є в тексті: нічого не вигадуй. Числа, дати й імена дослівно. Виведи лише пункти українською."#
+Лише те, що є в тексті: нічого не вигадуй і не бери тем, назв чи місць, яких у тексті немає; якщо сказано мало, пунктів теж мало. Числа, дати й імена дослівно. Виведи лише пункти українською."#
     )
 }
 
@@ -2327,6 +2559,31 @@ mod tests {
             "- Зустрічі з новими працівниками відділу [03:56]\n- Підготовка попередніх даних для ремонту обладнання, яке надійшло з філії 4512, для оформлення кошторису на ремонт [03:56]"
         );
         assert_eq!(clause_around("Техніка, яка прибула 12 числа, на складі.", "12", 9), "Техніка, яка прибула 12 числа, на складі");
+        // A line with two topics: the lost number about the first one is not stitched
+        // onto the point about the second, and comes before it
+        let said = vec![(114, "На орієнтирі Липа помічено 2 цілі. Здійснено 118 доставок.".to_string())];
+        let (text, kept) = keep_numbers("- Здійснено 118 доставок [01:54]", &said);
+        assert_eq!(kept, NumbersKept { appended: 0, added: 1, left: 0 });
+        assert_eq!(text, "- На орієнтирі Липа помічено 2 цілі [01:54]\n- Здійснено 118 доставок [01:54]");
+        // A number in a name elsewhere («Вишні-2») does not count as the lost «2 цілі»,
+        // and the name itself, already written, does not come back
+        let said = vec![(114, "На орієнтирі Липа помічено 2 цілі. Здійснено 118 доставок.".to_string()), (130, "Група на Вишні-2 без змін.".to_string())];
+        let (text, kept) = keep_numbers("- Здійснено 118 доставок [01:54]\n- Група на Вишні-2 без змін [02:10]", &said);
+        assert_eq!(kept, NumbersKept { appended: 0, added: 1, left: 0 });
+        assert_eq!(text, "- На орієнтирі Липа помічено 2 цілі [01:54]\n- Здійснено 118 доставок [01:54]\n- Група на Вишні-2 без змін [02:10]");
+        let (_, kept) = keep_numbers("- Група на Вишні-2 без змін [02:10]", &[(130, "Група на Вишні-2 без змін.".to_string())]);
+        assert_eq!(kept, NumbersKept::default());
+        // A lost name with a number still comes back, though «20» is written as a count
+        let (text, kept) = keep_numbers("- Прибуло 20 машин [00:10]", &[(150, "Це дорога М-20 на північ.".to_string())]);
+        assert_eq!(kept, NumbersKept { appended: 0, added: 1, left: 0 });
+        assert!(text.lines().any(|l| l.contains("дорога М-20") && l.ends_with("[02:30]")), "{text}");
+        // Landmarks: the name after «орієнтир» is a name; «Орієнтир» mid-sentence is small
+        assert_eq!(
+            landmark_names("- Помічено: Орієнтир липа – 3 цілі; Орієнтир вишня – 1 ціль [02:10]\n- Орієнтир сосна без змін [02:20]"),
+            "- Помічено: орієнтир Липа – 3 цілі; орієнтир Вишня – 1 ціль [02:10]\n- Орієнтир Сосна без змін [02:20]"
+        );
+        assert_eq!(landmark_names("- На орієнтирі, де була техніка [00:10]"), "- На орієнтирі, де була техніка [00:10]");
+        assert_eq!(landmark_names("- Це орієнтир для всіх [00:10]"), "- Це орієнтир для всіх [00:10]");
         // A number said in words backs the digits; one nobody said is marked
         let said = super::super::numbers::Said::of("отримали двадцять генераторів");
         let (text, n) = mark_unbacked_numbers("- Отримали 20 генераторів [00:10]\n- Отримали 35 генераторів [00:20]", &said, &said);
@@ -2810,5 +3067,47 @@ mod tests {
         let merged = dedup_points(vec!["Отримали генератори ⟨01:00⟩".into(), "отримали генератори на склад ⟨12:06⟩".into(), "Провели навчання ⟨?⟩".into()]);
         assert_eq!(merged, vec!["отримали генератори на склад ⟨01:00 · 12:06⟩", "Провели навчання ⟨?⟩"]);
         assert_eq!(source_times("a ⟨01:00 · 12:06⟩"), vec![60, 726]);
+    }
+
+    /// The secretary's bugs of 20.11: a test recording got an invented
+    /// overall summary; a short report kept only its first sentence
+    #[test]
+    fn a_test_recording_has_no_invented_summary_and_a_short_report_is_whole() {
+        // «Раз-два, записую…»: nothing to sum up
+        let test = vec![Line { seconds: 2, text: "Раз-два, О, зараз записую. І, в принципі, після цього мало би викинути нормально мій голос у стенограму.".into() }];
+        assert_eq!(overall_points_for(substance_words(&test), false), None);
+        assert_eq!(overall_points_for(100, false), Some((1, 2)));
+        assert_eq!(overall_points_for(2000, false), Some((5, 10)));
+        assert_eq!(overall_points_for(2000, true), Some((8, 15)));
+        // Points about supplies and fuel nobody spoke of go; a point told in other words stays
+        let said = backing_stems(&test[0].text);
+        let invented = "- Обговорено стан справ щодо забезпечення підрозділів, зокрема одягом та технікою.\n- Проведено аналіз ситуації на ділянках фронту.\n- Повідомлено про виявлення проблем із забезпеченням паливом.";
+        assert_eq!(keep_backed_points(invented, &said), (String::new(), 3));
+        let report = "Сьогодні прибуває один новий працівник у відділ. За вчора успішно завершили встановлення серверів. На сьогодні продовжуємо облаштування місць паркування авто і робочих місць нового персоналу. Оголошень на сьогодні немає.";
+        let said = backing_stems(report);
+        let (kept, dropped) = keep_backed_points("- Прибуває один новий працівник у відділ [05:38]\n- Завершено встановлення серверів\n- Обговорено забезпечення пальним і дрони", &said);
+        assert_eq!(dropped, 1, "{kept}");
+        assert!(kept.contains("серверів") && kept.contains("працівник"), "{kept}");
+        // 28 words were one point; four things said are four points at least
+        let working = working_lines(&[(336, "Відділ два.".to_string()), (338, report.to_string())]);
+        assert_eq!(points_for_speech(&working, false), 4);
+        assert!(is_short_speech(&working));
+        // The model kept only the first sentence: the rest comes back as said, the told one does not
+        let (points, back) = keep_said_facts("- Сьогодні прибуває один новий працівник у відділ [05:36]", &working);
+        assert_eq!(back, 3, "{points}");
+        assert!(points.contains("- За вчора успішно завершили встановлення серверів [05:38]"), "{points}");
+        assert!(points.contains("- Оголошень на сьогодні немає [05:38]"), "{points}");
+        assert_eq!(points.matches("прибуває").count(), 1, "{points}");
+        // Told in other words: nothing comes back
+        let told = "- Прибуває один новий працівник у відділ [05:38]\n- Учора встановили сервери [05:38]\n- Триває облаштування місць для авто і робочих місць персоналу [05:38]\n- Оголошень по відділу немає [05:38]";
+        assert_eq!(keep_said_facts(told, &working).1, 0);
+        // A long report is the model's to sum up: nothing is stitched back
+        let long = vec![(0, report.repeat(3))];
+        assert_eq!(keep_said_facts("- Прибуває один новий працівник [00:00]", &long).1, 0);
+        assert_eq!(points_for_speech(&[(0, "Отримали генератори.".to_string())], false), 1);
+        // The short-report rule is in the prompt only for a short speech
+        assert!(speaker_block_prompt("Спікер 1", report, 4, false, true).contains("окремим пунктом"));
+        assert!(!speaker_block_prompt("Спікер 1", report, 4, false, false).contains("окремим пунктом"));
+        assert!(overall_summary_prompt("x", 1, 2).contains("від 1 до 2"));
     }
 }

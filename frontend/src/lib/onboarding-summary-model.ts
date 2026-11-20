@@ -13,12 +13,14 @@ interface OnboardingSummaryModelStatus {
 const SUMMARY_MODEL_SIZES_MB: Record<string, number> = {
   'mamaylm:12b': 6962,
   'gemma3:12b': 6962,
+  'gemma4:26b': 13770,
 };
 
 /** Display names for download toasts */
 const SUMMARY_MODEL_NAMES: Record<string, string> = {
   'mamaylm:12b': 'MamayLM 12B',
   'gemma3:12b': 'Gemma 3 12B',
+  'gemma4:26b': 'Gemma 4 26B',
 };
 
 export function getSummaryModelDisplayName(model: string): string {

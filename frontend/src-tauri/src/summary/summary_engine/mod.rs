@@ -5,6 +5,7 @@ pub mod client;
 pub mod commands;
 pub mod model_manager;
 pub mod models;
+pub mod preferred;
 pub mod sidecar;
 
 // Re-export commonly used types

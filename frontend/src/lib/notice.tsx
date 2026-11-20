@@ -73,7 +73,10 @@ function getSnapshot() {
 function show(kind: Kind, title: React.ReactNode, options: NoticeOptions = {}, render?: Notice['render']): Id {
   serial += 1;
   const id = options.id ?? `notice-${serial}`;
-  current = { id, key: serial, kind, title, options, render };
+  // The same notice updated (a download's progress): changed in place, not
+  // shown anew, so it does not fade and grow in again on every update
+  const key = current && current.id === id && current.kind === kind ? current.key : serial;
+  current = { id, key, kind, title, options, render };
   emit();
   return id;
 }
@@ -256,6 +259,12 @@ function NoticeView({ notice, leaving }: { notice: Notice; leaving: boolean }) {
 
   // Hide after `duration`, paused while the pointer is over the notice or details are open
   const remaining = useRef(duration);
+  // Updated in place (a download that finished): its time starts again
+  const shownAs = useRef(notice);
+  if (shownAs.current !== notice) {
+    shownAs.current = notice;
+    remaining.current = duration;
+  }
   useEffect(() => {
     if (leaving || hovered || open || !Number.isFinite(remaining.current)) return;
     const started = Date.now();

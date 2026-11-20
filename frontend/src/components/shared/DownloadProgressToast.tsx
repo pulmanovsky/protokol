@@ -80,6 +80,7 @@ function DownloadToastContent({
   const sizes = unitLabel === 'МБ'
     ? `${formatSize(download.downloadedMb)} з ${formatSize(download.totalMb)}`
     : `${download.downloadedMb.toFixed(1)} з ${download.totalMb.toFixed(1)} ${unitLabel}`;
+  // Last on the line: the speed changes all the time and moves nothing after it
   const speed = download.speedMbps > 0 ? ` · ${download.speedMbps.toFixed(1).replace('.', ',')} ${unitLabel}/с` : '';
 
   const line = hasError
@@ -88,7 +89,7 @@ function DownloadToastContent({
       ? 'Завантажено'
       : isCancelled
         ? 'Завантаження скасовано'
-        : `${sizes}${speed} · ${Math.round(download.progress)}%`;
+        : `${sizes} · ${Math.round(download.progress)}%${speed}`;
 
   return (
     <div className="download-notice" role={hasError ? 'alert' : 'status'}>

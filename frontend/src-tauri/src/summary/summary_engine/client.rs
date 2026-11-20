@@ -143,8 +143,69 @@ pub async fn generate_with_builtin(
     generate_with_builtin_schema(app_data_dir, model_name, system_prompt, user_prompt, None, cancellation_token).await
 }
 
-/// Like [`generate_with_builtin`], with the answer held to a JSON schema
+/// Gemma 4 failed to load or answer in this run of the app: MamayLM writes the
+/// rest of the documents until the app is started again
+static PREFERRED_MODEL_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Why the preferred model should not be used for this call, if it should not
+fn reason_to_fall_back(model_file_exists: bool, failed_before: bool, recording: bool) -> Option<&'static str> {
+    if failed_before {
+        Some("it failed earlier in this run of the app")
+    } else if recording {
+        // Whisper is loaded while recording; Gemma 4 (~14 GB) beside it would push a
+        // 24 GB Mac into swap
+        Some("a recording is on")
+    } else if !model_file_exists {
+        Some("it is not downloaded yet")
+    } else {
+        None
+    }
+}
+
+fn is_cancellation(e: &anyhow::Error) -> bool {
+    e.to_string().to_lowercase().contains("cancel")
+}
+
+/// Like [`generate_with_builtin`], with the answer held to a JSON schema.
+///
+/// Gemma 4 has MamayLM as its fallback: MamayLM writes when Gemma 4 is not
+/// downloaded yet, while a recording is on, or when Gemma 4 fails (once it
+/// failed, for the rest of this run of the app). Without a MamayLM file the
+/// preferred model's own result or error stands.
 pub async fn generate_with_builtin_schema(
+    app_data_dir: &PathBuf,
+    model_name: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+    json_schema: Option<&str>,
+    cancellation_token: Option<&CancellationToken>,
+) -> Result<String> {
+    let Some(fallback) = models::fallback_model(model_name) else {
+        return generate_once(app_data_dir, model_name, system_prompt, user_prompt, json_schema, cancellation_token).await;
+    };
+    if !models::model_file_complete(app_data_dir, fallback) {
+        return generate_once(app_data_dir, model_name, system_prompt, user_prompt, json_schema, cancellation_token).await;
+    }
+    let preferred_exists = models::model_file_complete(app_data_dir, model_name);
+    let failed_before = PREFERRED_MODEL_FAILED.load(std::sync::atomic::Ordering::SeqCst);
+    let recording = crate::audio::recording_commands::recording_now();
+    if let Some(reason) = reason_to_fall_back(preferred_exists, failed_before, recording) {
+        log::info!("{} is not used because {}; {} writes instead", model_name, reason, fallback);
+        return generate_once(app_data_dir, fallback, system_prompt, user_prompt, json_schema, cancellation_token).await;
+    }
+    match generate_once(app_data_dir, model_name, system_prompt, user_prompt, json_schema, cancellation_token).await {
+        Ok(text) => Ok(text),
+        Err(e) if is_cancellation(&e) || cancellation_token.map_or(false, |t| t.is_cancelled()) => Err(e),
+        Err(e) => {
+            log::warn!("{} failed ({}); {} writes this and the following parts", model_name, e, fallback);
+            PREFERRED_MODEL_FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
+            generate_once(app_data_dir, fallback, system_prompt, user_prompt, json_schema, cancellation_token).await
+        }
+    }
+}
+
+/// One generation with exactly this model
+async fn generate_once(
     app_data_dir: &PathBuf,
     model_name: &str,
     system_prompt: &str,
@@ -317,6 +378,20 @@ pub async fn is_sidecar_healthy() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn falls_back_only_for_a_reason() {
+        assert_eq!(reason_to_fall_back(true, false, false), None);
+        assert!(reason_to_fall_back(false, false, false).is_some());
+        assert!(reason_to_fall_back(true, true, false).is_some());
+        assert!(reason_to_fall_back(true, false, true).is_some());
+    }
+
+    #[test]
+    fn cancellation_is_not_a_failure_of_the_model() {
+        assert!(is_cancellation(&anyhow!("Generation cancelled by user")));
+        assert!(!is_cancellation(&anyhow!("Sidecar error: failed to load model")));
+    }
 
     #[test]
     fn test_request_serialization() {
