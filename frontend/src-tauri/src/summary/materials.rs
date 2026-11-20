@@ -1530,7 +1530,7 @@ pub(crate) fn keep_numbers(points: &str, lines: &[(u32, String)]) -> (String, Nu
     let mut out: Vec<String> = points.lines().map(str::to_string).collect();
     let mut grown = vec![0usize; out.len()];
     let mut kept = NumbersKept::default();
-    // Counts and numbers in names are kept apart: «2 цілі» is still lost when
+    // Counts and numbers in names are kept apart: «2 вантажі» is still lost when
     // the points only have «Липа-2», and a lost «М-20» is not hidden by «20 машин»
     let found = extract(points);
     let written: HashSet<String> = found.iter().filter(|f| !in_a_name(points, f)).flat_map(|f| f.keys.clone()).collect();
@@ -1549,7 +1549,7 @@ pub(crate) fn keep_numbers(points: &str, lines: &[(u32, String)]) -> (String, Nu
                 let phrase = clause_around(sentence, &f.text, APPENDED_WORDS);
                 let open = |i: usize| out[i].contains(&mark) && grown.get(i).copied().unwrap_or(NUMBERS_PER_POINT) < NUMBERS_PER_POINT;
                 // The point from the same line that is about the same sentence. A
-                // line can carry two topics («На орієнтирі Липа 2 цілі. Здійснено
+                // line can carry two topics («На складі Липа 2 вантажі. Здійснено
                 // 118 доставок.»): a number from a sentence about another one is
                 // not stitched onto it. The whole sentence counts, not the clause:
                 // «…, як ми це робили попередні 4,5 роки» belongs to its sentence
@@ -2561,17 +2561,17 @@ mod tests {
         assert_eq!(clause_around("Техніка, яка прибула 12 числа, на складі.", "12", 9), "Техніка, яка прибула 12 числа, на складі");
         // A line with two topics: the lost number about the first one is not stitched
         // onto the point about the second, and comes before it
-        let said = vec![(114, "На орієнтирі Липа помічено 2 цілі. Здійснено 118 доставок.".to_string())];
+        let said = vec![(114, "На складі Липа прийнято 2 вантажі. Здійснено 118 доставок.".to_string())];
         let (text, kept) = keep_numbers("- Здійснено 118 доставок [01:54]", &said);
         assert_eq!(kept, NumbersKept { appended: 0, added: 1, left: 0 });
-        assert_eq!(text, "- На орієнтирі Липа помічено 2 цілі [01:54]\n- Здійснено 118 доставок [01:54]");
-        // A number in a name elsewhere («Вишні-2») does not count as the lost «2 цілі»,
+        assert_eq!(text, "- На складі Липа прийнято 2 вантажі [01:54]\n- Здійснено 118 доставок [01:54]");
+        // A number in a name elsewhere («Вишня-2») does not count as the lost «2 вантажі»,
         // and the name itself, already written, does not come back
-        let said = vec![(114, "На орієнтирі Липа помічено 2 цілі. Здійснено 118 доставок.".to_string()), (130, "Група на Вишні-2 без змін.".to_string())];
-        let (text, kept) = keep_numbers("- Здійснено 118 доставок [01:54]\n- Група на Вишні-2 без змін [02:10]", &said);
+        let said = vec![(114, "На складі Липа прийнято 2 вантажі. Здійснено 118 доставок.".to_string()), (130, "Склад Вишня-2 працює без змін.".to_string())];
+        let (text, kept) = keep_numbers("- Здійснено 118 доставок [01:54]\n- Склад Вишня-2 працює без змін [02:10]", &said);
         assert_eq!(kept, NumbersKept { appended: 0, added: 1, left: 0 });
-        assert_eq!(text, "- На орієнтирі Липа помічено 2 цілі [01:54]\n- Здійснено 118 доставок [01:54]\n- Група на Вишні-2 без змін [02:10]");
-        let (_, kept) = keep_numbers("- Група на Вишні-2 без змін [02:10]", &[(130, "Група на Вишні-2 без змін.".to_string())]);
+        assert_eq!(text, "- На складі Липа прийнято 2 вантажі [01:54]\n- Здійснено 118 доставок [01:54]\n- Склад Вишня-2 працює без змін [02:10]");
+        let (_, kept) = keep_numbers("- Склад Вишня-2 працює без змін [02:10]", &[(130, "Склад Вишня-2 працює без змін.".to_string())]);
         assert_eq!(kept, NumbersKept::default());
         // A lost name with a number still comes back, though «20» is written as a count
         let (text, kept) = keep_numbers("- Прибуло 20 машин [00:10]", &[(150, "Це дорога М-20 на північ.".to_string())]);
@@ -2579,10 +2579,10 @@ mod tests {
         assert!(text.lines().any(|l| l.contains("дорога М-20") && l.ends_with("[02:30]")), "{text}");
         // Landmarks: the name after «орієнтир» is a name; «Орієнтир» mid-sentence is small
         assert_eq!(
-            landmark_names("- Помічено: Орієнтир липа – 3 цілі; Орієнтир вишня – 1 ціль [02:10]\n- Орієнтир сосна без змін [02:20]"),
-            "- Помічено: орієнтир Липа – 3 цілі; орієнтир Вишня – 1 ціль [02:10]\n- Орієнтир Сосна без змін [02:20]"
+            landmark_names("- Маршрут: Орієнтир липа – 3 км; Орієнтир вишня – 1 км [02:10]\n- Орієнтир сосна без змін [02:20]"),
+            "- Маршрут: орієнтир Липа – 3 км; орієнтир Вишня – 1 км [02:10]\n- Орієнтир Сосна без змін [02:20]"
         );
-        assert_eq!(landmark_names("- На орієнтирі, де була техніка [00:10]"), "- На орієнтирі, де була техніка [00:10]");
+        assert_eq!(landmark_names("- На орієнтирі, де стоїть знак [00:10]"), "- На орієнтирі, де стоїть знак [00:10]");
         assert_eq!(landmark_names("- Це орієнтир для всіх [00:10]"), "- Це орієнтир для всіх [00:10]");
         // A number said in words backs the digits; one nobody said is marked
         let said = super::super::numbers::Said::of("отримали двадцять генераторів");
@@ -3081,11 +3081,11 @@ mod tests {
         assert_eq!(overall_points_for(2000, true), Some((8, 15)));
         // Points about supplies and fuel nobody spoke of go; a point told in other words stays
         let said = backing_stems(&test[0].text);
-        let invented = "- Обговорено стан справ щодо забезпечення підрозділів, зокрема одягом та технікою.\n- Проведено аналіз ситуації на ділянках фронту.\n- Повідомлено про виявлення проблем із забезпеченням паливом.";
+        let invented = "- Обговорено стан справ щодо забезпечення відділів, зокрема одягом та технікою.\n- Проведено аналіз ситуації на складах.\n- Повідомлено про виявлення проблем із забезпеченням паливом.";
         assert_eq!(keep_backed_points(invented, &said), (String::new(), 3));
         let report = "Сьогодні прибуває один новий працівник у відділ. За вчора успішно завершили встановлення серверів. На сьогодні продовжуємо облаштування місць паркування авто і робочих місць нового персоналу. Оголошень на сьогодні немає.";
         let said = backing_stems(report);
-        let (kept, dropped) = keep_backed_points("- Прибуває один новий працівник у відділ [05:38]\n- Завершено встановлення серверів\n- Обговорено забезпечення пальним і дрони", &said);
+        let (kept, dropped) = keep_backed_points("- Прибуває один новий працівник у відділ [05:38]\n- Завершено встановлення серверів\n- Обговорено забезпечення пальним і принтерами", &said);
         assert_eq!(dropped, 1, "{kept}");
         assert!(kept.contains("серверів") && kept.contains("працівник"), "{kept}");
         // 28 words were one point; four things said are four points at least

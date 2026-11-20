@@ -421,7 +421,7 @@ mod tests {
         assert_eq!(keys("ріст на 12,5%"), vec![vec!["12.5".to_string()]]);
         assert_eq!(keys("о 8:30"), vec![vec!["t8:30".to_string()]]);
         assert_eq!(keys("до 07.11.2026"), vec![vec!["date:7.11".to_string(), "2026".to_string()]]);
-        assert_eq!(keys("10 підарів на 7 олієнтирах"), vec![vec!["10".to_string()], vec!["7".to_string()]]);
+        assert_eq!(keys("10 машин на 7 майданчиках"), vec![vec!["10".to_string()], vec!["7".to_string()]]);
     }
 
     #[test]
@@ -468,9 +468,9 @@ mod tests {
     #[test]
     fn a_number_said_elsewhere_is_fine_and_one_never_said_has_no_guess() {
         let source = Said::of("зафіксовано 101 доставку");
-        let transcript = Said::of("вітер 24 метри за секунду; 10 підарів");
+        let transcript = Said::of("вітер 24 метри за секунду; 10 машин");
         assert!(check("вітер 24 м/с", &source, &transcript).is_empty());
-        let issues = check("знищено 55 цілей", &source, &transcript);
+        let issues = check("продано 55 квитків", &source, &transcript);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].fix, None);
         // One digit off (three or more digits): offered; two different candidates: none
