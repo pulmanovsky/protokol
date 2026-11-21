@@ -10,7 +10,9 @@
 // anywhere else, and nothing on the page is changed: what Protokol sees is
 // shown in its own toolbar above the page. The one thing Protokol asks of the
 // page is to press Meet's microphone button when the secretary presses
-// Protokol's (window.__protokolSetMic).
+// Protokol's (window.__protokolSetMic). And so that Meet keeps lighting the
+// tiles while its window is minimised, the page is always told it is visible
+// and its animation frames keep coming (see «Minimised window» below).
 //
 // Parts adapted from Vexa (https://github.com/Vexa-ai/vexa,
 // core/meetings/modules/gmeet-capture: gmeet-capture.ts, gmeet-speakers.ts,
@@ -25,7 +27,7 @@
   if (window.top !== window) return;
   window.__protokolMeetProbe = true;
 
-  const VERSION = 8;
+  const VERSION = 9;
   const LEVEL_MS = 100;
   const TILE_MS = 200;
   const REPORT_MS = 2000;
@@ -39,6 +41,71 @@
   const note = (msg) => {
     if (errors.length < 40) errors.push(`${Math.round((Date.now() - started) / 1000)}s ${msg}`);
   };
+
+  // ── Minimised window ─────────────────────────────────────────────────────
+  // A minimised window hides the page: WebKit stops its animation frames and
+  // Meet stops updating the tiles, keeping the last speaker lit to the end of
+  // the call. So the page is always told it is visible, and while it really
+  // is hidden its animation frames come from a timer (Protokol turns WebKit's
+  // timer slow-down for hidden pages off, meet/mod.rs). The report keeps the
+  // real state, and how much Meet changed on the page, so Protokol can tell
+  // live tiles from frozen ones.
+  const realVisibility = Object.getOwnPropertyDescriptor(Document.prototype, 'visibilityState');
+  const reallyHidden = () => {
+    try { return !!realVisibility && realVisibility.get.call(document) === 'hidden'; } catch (_) { return false; }
+  };
+  try {
+    Object.defineProperty(Document.prototype, 'visibilityState', { configurable: true, enumerable: true, get() { return 'visible'; } });
+    Object.defineProperty(Document.prototype, 'hidden', { configurable: true, enumerable: true, get() { return false; } });
+    const swallow = (e) => { e.stopImmediatePropagation(); };
+    window.addEventListener('visibilitychange', swallow, true);
+  } catch (e) {
+    note(`visibility: ${e && e.message}`);
+  }
+  const HIDDEN_FRAME_MS = 100;
+  const LATE_FRAME_MS = 1000;
+  try {
+    const nativeFrame = window.requestAnimationFrame.bind(window);
+    const nativeCancel = window.cancelAnimationFrame.bind(window);
+    const waiting = new Map(); // id -> { frame, timer }
+    let frameId = 0;
+    // A frame asked for while the page is hidden comes after 100 ms; one asked
+    // for before it was hidden, after at most 1 s instead of never
+    window.requestAnimationFrame = function requestAnimationFrame(cb) {
+      const id = ++frameId;
+      const run = (t) => {
+        const w = waiting.get(id);
+        if (!w) return;
+        waiting.delete(id);
+        nativeCancel(w.frame);
+        clearTimeout(w.timer);
+        cb(t);
+      };
+      waiting.set(id, { frame: nativeFrame(run), timer: setTimeout(() => run(performance.now()), reallyHidden() ? HIDDEN_FRAME_MS : LATE_FRAME_MS) });
+      return id;
+    };
+    window.cancelAnimationFrame = function cancelAnimationFrame(id) {
+      const w = waiting.get(id);
+      if (!w) return;
+      waiting.delete(id);
+      nativeCancel(w.frame);
+      clearTimeout(w.timer);
+    };
+  } catch (e) {
+    note(`frames: ${e && e.message}`);
+  }
+  // Class and style changes Meet made on the page since the last report
+  let pageChanges = 0;
+  const watchChanges = () => {
+    try {
+      new MutationObserver((records) => { pageChanges += records.length; })
+        .observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+    } catch (e) {
+      note(`changes: ${e && e.message}`);
+    }
+  };
+  if (document.documentElement) watchChanges();
+  else document.addEventListener('DOMContentLoaded', watchChanges, { once: true });
 
   // ── Audio: one AudioContext, an analyser per stream ──────────────────────
   let ctx = null;
@@ -467,7 +534,9 @@
       meeting: meetingCode() || location.pathname.slice(0, 40),
       // Meet's own start page (/, /landing or /home): Protokol shows its start screen instead
       landing: /^\/((landing|home)\/?)?$/.test(location.pathname),
-      visible: document.visibilityState,
+      // The real state: the page itself is always told «visible»
+      visible: reallyHidden() ? 'hidden' : 'visible',
+      changes: pageChanges,
       ctx: ctx ? { state: ctx.state, rate: ctx.sampleRate } : null,
       media: structure(),
       streams: out,
@@ -488,6 +557,7 @@
       errors: errors.splice(0, errors.length),
     };
     classChanges = [];
+    pageChanges = 0;
     const ipc = window.__TAURI_INTERNALS__;
     if (!ipc || typeof ipc.invoke !== 'function') return;
     ipc.invoke('plugin:meetprobe|push', { report: snap })

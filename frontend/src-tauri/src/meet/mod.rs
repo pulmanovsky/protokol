@@ -312,7 +312,9 @@ fn build_window<R: Runtime>(app: &AppHandle<R>, url: Url) -> tauri::Result<()> {
             }
             tauri::webview::NewWindowResponse::Deny
         });
-    window.add_child(page, LogicalPosition::new(0.0, BAR_HEIGHT), LogicalSize::new(width, (height - BAR_HEIGHT).max(1.0)))?;
+    let page = window.add_child(page, LogicalPosition::new(0.0, BAR_HEIGHT), LogicalSize::new(width, (height - BAR_HEIGHT).max(1.0)))?;
+    #[cfg(target_os = "macos")]
+    keep_page_visible(&page);
 
     let bar_height = if START_SCREEN.load(Ordering::SeqCst) { height } else { BAR_HEIGHT };
     let bar = window.add_child(
@@ -331,6 +333,55 @@ fn build_window<R: Runtime>(app: &AppHandle<R>, url: Url) -> tauri::Result<()> {
     )?;
     let _ = pop.hide();
     Ok(())
+}
+
+/// While its page is hidden, Meet stops updating who is lit as speaking and
+/// keeps the last speaker's tile lit. WebKit hides the page as soon as other
+/// windows cover the Meet window or it is on another desktop; this keeps it
+/// visible then. A minimised window still hides it: there capture.js keeps
+/// Meet running on timers, so WebKit's slow-down of hidden pages' timers and
+/// of their process is turned off too.
+#[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs)] // objc's msg_send! asks for cfg(cargo-clippy)
+fn keep_page_visible<R: Runtime>(page: &Webview<R>) {
+    use objc::runtime::{Object, BOOL, NO, YES};
+    use objc::{msg_send, sel, sel_impl};
+    let done = page.with_webview(|w| unsafe {
+        let view = w.inner() as *mut Object;
+        if view.is_null() {
+            return;
+        }
+        let can: BOOL = msg_send![view, respondsToSelector: sel!(_setWindowOcclusionDetectionEnabled:)];
+        let covered = can == YES;
+        if covered {
+            let _: () = msg_send![view, _setWindowOcclusionDetectionEnabled: NO];
+        }
+        // The configuration is a copy, its preferences the page's own
+        let config: *mut Object = msg_send![view, configuration];
+        let prefs: *mut Object = if config.is_null() { std::ptr::null_mut() } else { msg_send![config, preferences] };
+        let mut timers = 0;
+        if !prefs.is_null() {
+            let can: BOOL = msg_send![prefs, respondsToSelector: sel!(_setHiddenPageDOMTimerThrottlingEnabled:)];
+            if can == YES {
+                let _: () = msg_send![prefs, _setHiddenPageDOMTimerThrottlingEnabled: NO];
+                timers += 1;
+            }
+            let can: BOOL = msg_send![prefs, respondsToSelector: sel!(_setHiddenPageDOMTimerThrottlingAutoIncreases:)];
+            if can == YES {
+                let _: () = msg_send![prefs, _setHiddenPageDOMTimerThrottlingAutoIncreases: NO];
+                timers += 1;
+            }
+            let can: BOOL = msg_send![prefs, respondsToSelector: sel!(_setPageVisibilityBasedProcessSuppressionEnabled:)];
+            if can == YES {
+                let _: () = msg_send![prefs, _setPageVisibilityBasedProcessSuppressionEnabled: NO];
+                timers += 1;
+            }
+        }
+        info!("Meet: page kept visible when covered: {covered}; hidden-page slow-downs off: {timers} of 3");
+    });
+    if let Err(e) = done {
+        warn!("Meet: {e}");
+    }
 }
 
 /// A Meet link the page wanted in a new window: this window goes to it,
@@ -554,7 +605,10 @@ async fn push<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, report: serde_
             .unwrap_or(0);
         let ctx = report.get("ctx").and_then(|c| c.get("state")).and_then(|s| s.as_str()).unwrap_or("none");
         let in_call = report.get("inCall").and_then(|v| v.as_bool()).unwrap_or(false);
-        info!("Meet report #{n}: in call={in_call} streams={streams} tiles={tiles} speaking-class hits={hits} audio={ctx}");
+        let page = report.get("visible").and_then(|v| v.as_str()).unwrap_or("?");
+        let changes = report.get("changes").and_then(|v| v.as_u64()).unwrap_or(0);
+        let minimised = webview.window().is_minimized().unwrap_or(false);
+        info!("Meet report #{n}: in call={in_call} streams={streams} tiles={tiles} speaking-class hits={hits} audio={ctx} page={page} changes={changes} minimised={minimised}");
         check_sign_in(&webview);
     }
     if report.get("landing").and_then(|v| v.as_bool()) == Some(true) {

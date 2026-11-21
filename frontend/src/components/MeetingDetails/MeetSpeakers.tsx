@@ -132,6 +132,11 @@ export function MeetNotices({
           Дані Google Meet не збіглися зі звуком запису, тому спікерів розпізнано за голосом.
         </div>
       )}
+      {status?.one_lit && (
+        <div className="rounded-lg bg-[var(--selected)] px-2.5 py-2 text-[color:var(--muted-text)]">
+          У Google Meet майже весь час був підсвічений один учасник, хоча говорили кілька людей, тому спікерів розпізнано за голосом.
+        </div>
+      )}
       {open.length > 0 && !later && (
         <div className="flex items-center gap-2 rounded-lg bg-[var(--blue-tint)] px-2.5 py-2">
           <span className="min-w-0 flex-1">

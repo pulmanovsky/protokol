@@ -74,6 +74,8 @@ export interface MeetStatus {
   accounts: number;
   opened_at_s: number | null;
   mismatch: boolean;
+  /** One participant was lit nearly all the time while several voices spoke */
+  one_lit?: boolean;
 }
 
 /** A Meet account and the saved person behind it (speakers/meet_names.rs) */

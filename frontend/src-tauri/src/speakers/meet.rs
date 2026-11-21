@@ -59,6 +59,12 @@ const FILL: usize = 10;
 const LATE_S: f64 = 60.0;
 /// Microphone level that counts as the user speaking (as in `timeline`)
 const MIC_SPEECH_LEVEL: u16 = 150;
+/// One participant lit in this share of the lit frames tells nobody apart
+const ONE_LIT_SHARE: f64 = 0.95;
+/// A voice heard this long in the call is a person of its own (s)
+const HEARD_VOICE_S: f64 = 20.0;
+/// From this many such voices, one lit participant is not all of them
+const HEARD_VOICES: usize = 3;
 
 /// What Meet gave a recording, shown at the top of «Спікери»
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -71,6 +77,10 @@ pub struct MeetStatus {
     pub opened_at_s: Option<f64>,
     /// There were Meet frames, but they did not fit the recording's sound
     pub mismatch: bool,
+    /// One participant was lit nearly all the time while several voices
+    /// spoke (a microphone left on, a room on one account): not used
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub one_lit: bool,
 }
 
 pub const STATUS_FILE: &str = "meet-speakers.json";
@@ -349,6 +359,18 @@ pub fn plan(call: &MeetCall, start_ms: f64, system: &[f32], levels: Option<&Chan
             split[p] = big;
         }
     }
+    // One participant lit nearly all the time, while the call has several
+    // voices of its own: the frames tell nobody apart (on 21.11 ten voices
+    // became one), so the voices stay as heard. An account split by sure
+    // saved voices is still used.
+    let lit_of = |p: usize| -> usize { (0..voices).map(|k| by_voice[k][p]).sum() };
+    if let Some(top) = (0..people).max_by_key(|&p| lit_of(p)) {
+        let heard = d.speech_s.iter().filter(|&&s| s >= HEARD_VOICE_S).count();
+        if lit_of(top) as f64 >= ONE_LIT_SHARE * labelled as f64 && heard >= HEARD_VOICES && split[top].is_empty() {
+            info!("Meet: one participant lit in {} of {labelled} frames while {heard} voices spoke; voices kept as heard", lit_of(top));
+            return Err(MeetStatus { one_lit: true, ..Default::default() });
+        }
+    }
     let key_of = |p: usize, k: usize| -> Key {
         if split[p].is_empty() {
             Key::Part(p)
@@ -450,7 +472,7 @@ pub fn plan(call: &MeetCall, start_ms: f64, system: &[f32], levels: Option<&Chan
         Key::Voice(_) => None,
     });
     let accounts = accounts.collect::<std::collections::HashSet<_>>().len();
-    let status = MeetStatus { used: true, accounts, opened_at_s: opened_at.filter(|&s| s > LATE_S), mismatch: false };
+    let status = MeetStatus { used: true, accounts, opened_at_s: opened_at.filter(|&s| s > LATE_S), ..Default::default() };
     info!("Meet: {} of {} frames lit as one participant; {accounts} participant(s), {} speaker(s)", labelled, covered, n);
     Ok(Plan { turns, speech_s, meet_name, shared: shared_of, voice, measure, status, self_name })
 }
@@ -619,7 +641,7 @@ mod tests {
 
     #[test]
     fn shared_account_split_only_by_sure_saved_voices() {
-        // One account («Штаб»), two voices of diarization
+        // One account («Бухгалтерія»), two voices of diarization
         let s = script(400, |x| if (x / 20) % 2 == 0 { Some(0) } else { None });
         let mut d = Diarization { turns: Vec::new(), centroids: vec![vec![1.0, 0.0], vec![0.0, 1.0]], speech_s: vec![0.0, 0.0] };
         for b in (0..400).step_by(40) {
@@ -627,17 +649,46 @@ mod tests {
             d.turns.push(Turn { start: b as f64 + 10.0, end: b as f64 + 20.0, speaker: 1 });
         }
         let start = 1_794_500_000_000.0;
-        let call = meet(&s, &["Штаб"], start, 0.0, 0);
-        let sure = [Some("Грім".to_string()), Some("Тайфун".to_string())];
+        let call = meet(&s, &["Бухгалтерія"], start, 0.0, 0);
+        let sure = [Some("Олена".to_string()), Some("Тарас".to_string())];
         let p = plan(&call, start, &sound(&s), None, &d, &sure).unwrap();
-        assert_eq!(p.meet_name.iter().filter(|n| n.as_deref() == Some("Штаб")).count(), 2);
+        assert_eq!(p.meet_name.iter().filter(|n| n.as_deref() == Some("Бухгалтерія")).count(), 2);
         assert!(p.shared.iter().all(|x| *x));
         assert!(p.measure.iter().all(|m| !m));
         // A new voice: the account stays one speaker
-        let unsure = [Some("Грім".to_string()), Some("Тайфун?".to_string())];
+        let unsure = [Some("Олена".to_string()), Some("Тарас?".to_string())];
         let p = plan(&call, start, &sound(&s), None, &d, &unsure).unwrap();
-        assert_eq!(p.meet_name.iter().filter(|n| n.as_deref() == Some("Штаб")).count(), 1);
+        assert_eq!(p.meet_name.iter().filter(|n| n.as_deref() == Some("Бухгалтерія")).count(), 1);
         assert!(p.shared[0]);
+    }
+
+    #[test]
+    fn one_participant_lit_all_the_time_is_not_used() {
+        // Three people speak in turn, but Meet lights the same tile throughout
+        // (a microphone left on): their voices stay apart
+        let s = script(300, who);
+        let start = 1_794_500_000_000.0;
+        let mut call = meet(&s, &["Анна", "Борис", "Віра"], start, 0.0, 0);
+        call.lit.iter_mut().filter(|l| !l.is_empty()).for_each(|l| *l = vec![0]);
+        let mut d = Diarization { turns: Vec::new(), centroids: vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![0.7, 0.7]], speech_s: vec![0.0; 3] };
+        for (x, w) in s.iter().enumerate() {
+            let Some(k) = *w else { continue };
+            d.speech_s[k] += 1.0;
+            match d.turns.last_mut() {
+                Some(t) if t.speaker == k && (t.end - x as f64).abs() < 1e-9 => t.end = x as f64 + 1.0,
+                _ => d.turns.push(Turn { start: x as f64, end: x as f64 + 1.0, speaker: k }),
+            }
+        }
+        let err = plan(&call, start, &sound(&s), None, &d, &[None, None, None]).unwrap_err();
+        assert!(err.one_lit && !err.used && !err.mismatch);
+        // One person heard in two voices (the second short): the account is them
+        d.speech_s = vec![200.0, 15.0, 0.0];
+        assert!(plan(&call, start, &sound(&s), None, &d, &[None, None, None]).is_ok());
+        // Three sure saved voices behind the account split it as before
+        d.speech_s = vec![75.0; 3];
+        let sure = [Some("Олена".to_string()), Some("Тарас".to_string()), Some("Ірина".to_string())];
+        let p = plan(&call, start, &sound(&s), None, &d, &sure).expect("split by saved voices");
+        assert!(p.shared.iter().any(|x| *x));
     }
 
     #[test]

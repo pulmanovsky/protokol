@@ -60,12 +60,17 @@ impl MeetCall {
         }
     }
 
-    /// Adds one report's frames
-    fn add_report(&mut self, r: &Value) {
-        let Some(lit) = r.get("lit").and_then(|v| v.as_array()) else { return };
+    /// Adds one report's frames; false when it has none to add
+    fn add_report(&mut self, r: &Value) -> bool {
+        // While the page is hidden Meet can stop updating the tiles and keep
+        // the last speaker's lit: such frames say nothing of who speaks
+        if frozen(r) {
+            return false;
+        }
+        let Some(lit) = r.get("lit").and_then(|v| v.as_array()) else { return false };
         let n = lit.len();
         if n == 0 {
-            return;
+            return false;
         }
         let step = r.get("stepMs").and_then(|v| v.as_f64()).unwrap_or(100.0);
         let report_t = r.get("t").and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -100,6 +105,7 @@ impl MeetCall {
             self.level.push(level[j]);
             self.lit.push(ids);
         }
+        true
     }
 
     /// Only the frames within [from, to] (ms), names renumbered to those used
@@ -118,9 +124,27 @@ impl MeetCall {
     }
 }
 
-fn read_reports(path: &Path, from: f64, to: f64, call: &mut MeetCall) -> usize {
-    let Ok(file) = fs::File::open(path) else { return 0 };
-    let mut used = 0;
+/// A report sent while the Meet page was hidden (capture.js `visible`) whose
+/// lit tiles cannot be trusted. Since report version 9 capture.js keeps Meet
+/// running in a minimised window, and a live page changes classes whenever
+/// someone is lit (a few changes per report, none in silence); a page that
+/// stood still with a tile lit is frozen. Older reports from a hidden page
+/// came from a page that froze.
+fn frozen(r: &Value) -> bool {
+    if r.get("visible").and_then(|v| v.as_str()) != Some("hidden") {
+        return false;
+    }
+    match r.get("changes").and_then(|v| v.as_u64()) {
+        None => true,
+        Some(0) => r.get("lit").and_then(|v| v.as_array()).is_some_and(|frames| frames.iter().any(|f| f.as_array().is_some_and(|a| !a.is_empty()))),
+        Some(_) => false,
+    }
+}
+
+/// Reports in the span read, and of them those from a frozen page
+fn read_reports(path: &Path, from: f64, to: f64, call: &mut MeetCall) -> (usize, usize) {
+    let Ok(file) = fs::File::open(path) else { return (0, 0) };
+    let (mut used, mut hidden_ones) = (0, 0);
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         let Ok(r) = serde_json::from_str::<Value>(&line) else { continue };
         let t = r.get("t").and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -128,17 +152,19 @@ fn read_reports(path: &Path, from: f64, to: f64, call: &mut MeetCall) -> usize {
         if t < from || t - 10_000.0 > to {
             continue;
         }
-        call.add_report(&r);
+        if !call.add_report(&r) && frozen(&r) {
+            hidden_ones += 1;
+        }
         used += 1;
     }
-    used
+    (used, hidden_ones)
 }
 
 /// The call's frames between `from` and `to` (ms since 1970) from the
 /// reports in `dirs`. Files last written before `from` are not opened.
 pub fn load_span(dirs: &[PathBuf], from: f64, to: f64) -> Option<MeetCall> {
     let mut call = MeetCall::default();
-    let mut files = 0;
+    let (mut files, mut reports, mut hidden_ones) = (0, 0, 0);
     for dir in dirs {
         let Ok(entries) = fs::read_dir(dir) else { continue };
         for e in entries.flatten() {
@@ -156,10 +182,16 @@ pub fn load_span(dirs: &[PathBuf], from: f64, to: f64) -> Option<MeetCall> {
             if modified < from {
                 continue;
             }
-            if read_reports(&path, from, to, &mut call) > 0 {
+            let (used, hidden_here) = read_reports(&path, from, to, &mut call);
+            if used > 0 {
                 files += 1;
+                reports += used;
+                hidden_ones += hidden_here;
             }
         }
+    }
+    if hidden_ones > 0 {
+        info!("Meet: {hidden_ones} of {reports} report(s) came while the Meet page was hidden and stood still; left out");
     }
     let call = call.span(from, to);
     if call.is_empty() {
@@ -254,6 +286,55 @@ mod tests {
         assert_eq!(load_folder(&dir).unwrap(), call);
         fs::write(dir.join("metadata.json"), r#"{"created_at":"2026-11-12T22:36:55.117Z"}"#).unwrap();
         assert_eq!(recording_start_ms(&dir), Some(1_794_523_015_117.0));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn frames_from_a_frozen_hidden_page_are_left_out() {
+        let mut call = MeetCall::default();
+        // An older page froze while hidden, keeping the last speaker lit
+        let mut hidden = report(10_000.0, &["Анна"], vec![vec![0], vec![0]], vec![vec![5, 6]], Some(vec![9_900.0, 10_000.0]));
+        hidden["visible"] = serde_json::json!("hidden");
+        assert!(!call.add_report(&hidden));
+        // A page that stood still with a tile lit
+        hidden["changes"] = serde_json::json!(0);
+        assert!(!call.add_report(&hidden));
+        assert!(call.is_empty());
+        // Meet kept changing the page: its tiles are live, however few the changes
+        let mut live = report(11_000.0, &["Анна"], vec![vec![0]], vec![vec![5]], Some(vec![11_000.0]));
+        live["visible"] = serde_json::json!("hidden");
+        live["changes"] = serde_json::json!(3);
+        assert!(call.add_report(&live));
+        assert_eq!(call.t, vec![11_000.0]);
+        // Silence: nothing lit, nothing changed
+        let mut quiet = report(11_100.0, &["Анна"], vec![vec![]], vec![vec![0]], Some(vec![11_100.0]));
+        quiet["visible"] = serde_json::json!("hidden");
+        quiet["changes"] = serde_json::json!(0);
+        assert!(call.add_report(&quiet));
+        assert_eq!(call.t, vec![11_000.0, 11_100.0]);
+        call = MeetCall::default();
+        let mut shown = report(12_000.0, &["Анна", "Борис"], vec![vec![1]], vec![vec![5]], Some(vec![12_000.0]));
+        shown["visible"] = serde_json::json!("visible");
+        assert!(call.add_report(&shown));
+        assert_eq!(call.t, vec![12_000.0]);
+        assert_eq!(call.names, vec!["Борис".to_string()]);
+        assert_eq!(call.lit, vec![vec![0]]);
+
+        // Read from a file: the hidden report's frames are not in the span
+        let dir = std::env::temp_dir().join(format!("meet-hidden-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut a = report(5_000_000.0, &["Анна"], vec![vec![0]], vec![vec![10]], Some(vec![5_000_000.0]));
+        a["visible"] = serde_json::json!("hidden");
+        a["changes"] = serde_json::json!(0);
+        let b = report(5_002_000.0, &["Борис"], vec![vec![0]], vec![vec![10]], Some(vec![5_002_000.0]));
+        fs::write(dir.join("a.jsonl"), format!("{a}\n{b}\n")).unwrap();
+        let span = load_span(&[dir.clone()], 4_000_000.0, 6_000_000.0).unwrap();
+        assert_eq!(span.t, vec![5_002_000.0]);
+        assert_eq!(span.names, vec!["Борис".to_string()]);
+        // Only hidden reports: nothing to go on
+        fs::write(dir.join("a.jsonl"), format!("{a}\n")).unwrap();
+        assert!(load_span(&[dir.clone()], 4_000_000.0, 6_000_000.0).is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 }
