@@ -197,6 +197,8 @@ pub async fn identify_with_stop(
     let models = models.to_path_buf();
     let folder: Option<String> = sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = ?").bind(meeting_id).fetch_optional(&pool).await?.flatten();
     let folder = PathBuf::from(folder.ok_or_else(|| anyhow!("Для цього запису немає папки зі звуком"))?);
+    // This recording's journal takes the lines while the speakers are found
+    let _journal = crate::logfile::meeting_scope(&folder);
     let audio_path = crate::audio::retranscription::find_audio_file(&folder)?;
     // Times stored before the call/mix map existed are moved first
     if let Err(e) = super::time_map::migrate(&pool, meeting_id, &folder, |p| decode_16k(p)).await {

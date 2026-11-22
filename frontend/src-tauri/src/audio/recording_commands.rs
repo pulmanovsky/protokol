@@ -290,7 +290,7 @@ async fn prepare_audio_for_recording(
     }
 
     if let Err(e) = super::devices::verify_microphone_access().await {
-        error!("Microphone access verification failed: {}", e);
+        error!("MIC-DENIED microphone access verification failed: {}", e);
         return Err(e.to_string());
     }
     Ok(())

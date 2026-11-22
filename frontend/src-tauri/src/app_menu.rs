@@ -84,6 +84,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let help = SubmenuBuilder::new(app, "Довідка")
         .item(&item("menu_privacy", "Приватність і дані", None)?)
         .separator()
+        .item(&item("menu_mark", "Позначити проблему", Some("CmdOrCtrl+Shift+P"))?)
         .item(&item("menu_report", "Повідомити про проблему…", None)?)
         .item(&item("menu_suggest", "Запропонувати покращення…", None)?)
         .separator()
@@ -180,6 +181,11 @@ pub fn on_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
                     log::warn!("Meet: {e}");
                 }
             });
+            return;
+        }
+        "menu_mark" => {
+            // A mark in the journal at this moment; the windows show that it was made
+            crate::report::mark_now(app, None, "menu");
             return;
         }
         "menu_privacy" | "menu_github" => {

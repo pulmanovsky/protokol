@@ -131,7 +131,7 @@ pub async fn at_startup<R: Runtime>(app: AppHandle<R>) {
     match free_disk_mb(&models_dir) {
         Some(free) if room_for(def.size_mb, free) => {}
         Some(free) => {
-            log::warn!("Gemma 4 is not downloaded: {} MB free, {} MB needed; MamayLM keeps writing documents", free, def.size_mb + DISK_HEADROOM_MB);
+            log::warn!("DISK-LOW Gemma 4 is not downloaded: {} MB free, {} MB needed; MamayLM keeps writing documents", free, def.size_mb + DISK_HEADROOM_MB);
             return;
         }
         None => {

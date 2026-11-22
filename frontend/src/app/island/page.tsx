@@ -6,7 +6,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow, currentMonitor } from '@tauri-apps/api/window';
 import { LogicalPosition } from '@tauri-apps/api/dpi';
 import { meterPercent, readStoredSources, SILENCE_RMS, useMicMute, useCallMute } from '@/lib/audioSources';
-import { BAR_WEIGHTS, Bars, CallIcon, Chevron, DoneIcon, formatClock, MicIcon, PauseIcon, PlayIcon, Ring, StopIcon, WarnIcon, XIcon } from '@/components/capsule/parts';
+import { BAR_WEIGHTS, Bars, CallIcon, Chevron, DoneIcon, formatClock, MarkButton, MicIcon, PauseIcon, PlayIcon, Ring, StopIcon, WarnIcon, XIcon } from '@/components/capsule/parts';
 import { answerPrompt } from '@/components/MeetPrompt';
 import { useMeetLive, type MeetPrompt } from '@/lib/meet';
 
@@ -502,6 +502,7 @@ export default function IslandPage() {
         )}
 
         <span className="isl-sep" data-tauri-drag-region />
+        <MarkButton className="isl-btn" source="recording-panel" />
         <button
           type="button"
           className="isl-btn"

@@ -352,6 +352,8 @@ impl SummaryService {
         summary_language: Option<String>,
     ) {
         let start_time = Instant::now();
+        // This recording's journal takes the lines while the document is written
+        let _journal = crate::logfile::meeting_scope_by_id(&pool, &meeting_id).await;
         info!(
             "Starting background processing for meeting_id: {}",
             meeting_id
@@ -767,7 +769,7 @@ impl SummaryService {
         error_msg: &str,
     ) {
         error!(
-            "Processing failed for meeting_id {}: {}",
+            "DOC-FAILED processing failed for meeting_id {}: {}",
             meeting_id, error_msg
         );
         match SummaryProcessesRepository::update_process_failed(

@@ -257,6 +257,8 @@ impl RecordingSaver {
 
         // Write initial metadata.json
         self.write_metadata(&meeting_folder, &metadata)?;
+        // The recording's own journal (diagnostics.log) starts here
+        crate::logfile::recording_started(&meeting_folder);
 
         self.meeting_folder = Some(meeting_folder);
         self.metadata = Some(metadata);
@@ -355,6 +357,9 @@ impl RecordingSaver {
         recording_duration: Option<f64>
     ) -> Result<Option<String>, String> {
         info!("Stopping recording saver");
+        if let Some(folder) = &self.meeting_folder {
+            crate::logfile::recording_stopped(folder);
+        }
 
         // Stop accumulation
         if let Ok(mut is_saving) = self.is_saving.lock() {

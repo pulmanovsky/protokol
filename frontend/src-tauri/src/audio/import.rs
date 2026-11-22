@@ -349,6 +349,8 @@ async fn run_import<R: Runtime>(
     // Create meeting folder
     let base_folder = super::recording_preferences::recordings_folder();
     let meeting_folder = create_meeting_folder(&base_folder, &title, false)?;
+    // The imported recording's journal takes the lines while it is recognised
+    let _journal = crate::logfile::meeting_scope(&meeting_folder);
 
     // Copy audio file to meeting folder
     emit_progress(&app, "copying", 10, "Копіювання файлу…");

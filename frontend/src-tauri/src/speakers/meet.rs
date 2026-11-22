@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use log::info;
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 
 use super::{Diarization, Turn};
@@ -367,7 +367,7 @@ pub fn plan(call: &MeetCall, start_ms: f64, system: &[f32], levels: Option<&Chan
     if let Some(top) = (0..people).max_by_key(|&p| lit_of(p)) {
         let heard = d.speech_s.iter().filter(|&&s| s >= HEARD_VOICE_S).count();
         if lit_of(top) as f64 >= ONE_LIT_SHARE * labelled as f64 && heard >= HEARD_VOICES && split[top].is_empty() {
-            info!("Meet: one participant lit in {} of {labelled} frames while {heard} voices spoke; voices kept as heard", lit_of(top));
+            warn!("MEET-ONE-LIT one participant lit in {} of {labelled} frames while {heard} voices spoke; voices kept as heard", lit_of(top));
             return Err(MeetStatus { one_lit: true, ..Default::default() });
         }
     }

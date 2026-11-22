@@ -191,7 +191,7 @@ pub fn load_span(dirs: &[PathBuf], from: f64, to: f64) -> Option<MeetCall> {
         }
     }
     if hidden_ones > 0 {
-        info!("Meet: {hidden_ones} of {reports} report(s) came while the Meet page was hidden and stood still; left out");
+        warn!("MEET-HIDDEN {hidden_ones} of {reports} Meet report(s) came while the Meet page was hidden and stood still; left out");
     }
     let call = call.span(from, to);
     if call.is_empty() {

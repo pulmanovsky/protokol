@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { meterPercent, SILENCE_RMS, useCallMute, useMicMute } from '@/lib/audioSources';
-import { BAR_WEIGHTS, Bars, CallIcon, CameraIcon, formatClock, MicIcon, PauseIcon, PlayIcon, StopIcon } from '@/components/capsule/parts';
+import { BAR_WEIGHTS, Bars, CallIcon, CameraIcon, formatClock, MarkButton, MicIcon, PauseIcon, PlayIcon, StopIcon } from '@/components/capsule/parts';
 import { isMeetUrl, participantsText, useMeetLive, type MeetPrompt } from '@/lib/meet';
 import type { CalendarEvent } from '@/components/CalendarReminder';
 
@@ -225,6 +225,7 @@ export default function MeetBar() {
           {camButton}
         </>
       )}
+      <MarkButton className="mcap-btn" source="meet-window" />
       <button
         type="button"
         className="mcap-btn"

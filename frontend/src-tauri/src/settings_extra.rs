@@ -216,41 +216,36 @@ pub fn reveal_in_finder(dir: &Path) -> Result<(), String> {
     }
 }
 
-/// «Показати у Finder» for the log folder (the log file is selected)
+/// «Показати у Finder» for the journal folder (today's file is selected)
 #[tauri::command]
 pub async fn api_log_reveal() -> Result<(), String> {
     let dir = log_dir().ok_or("Немає домашньої папки")?;
-    let file = dir.join("protokol.log");
-    if file.exists() {
+    if let Some(file) = crate::logfile::recent_files(1).pop() {
         let status = std::process::Command::new("open").arg("-R").arg(&file).status().map_err(|e| e.to_string())?;
         if status.success() {
-            info!("Log shown in Finder: {:?}", file);
+            info!("Journal shown in Finder");
             return Ok(());
         }
     }
     reveal_in_finder(&dir)
 }
 
-/// The log's size in bytes
+/// The journal's size in bytes (the day files and the marks)
 #[tauri::command]
 pub async fn api_log_size() -> u64 {
     log_dir().map(|d| folder_size(&d)).unwrap_or(0)
 }
 
-/// «Очистити…»: the log files are emptied (the app keeps writing to them)
+/// «Очистити…»: the day files, the marks and the black box go, and the
+/// recordings' own journals (`diagnostics.log` next to each recording)
 #[tauri::command]
-pub async fn api_log_clear() -> Result<(), String> {
-    let dir = log_dir().ok_or("Немає домашньої папки")?;
-    let Ok(entries) = std::fs::read_dir(&dir) else { return Ok(()) };
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.extension().and_then(|x| x.to_str()) == Some("log") {
-            if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&p) {
-                f.set_len(0).map_err(|e| e.to_string())?;
-            }
-        }
-    }
-    info!("Log cleared");
+pub async fn api_log_clear<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    crate::logfile::clear();
+    let recordings = match crate::speakers::commands::pool(&app) {
+        Ok(pool) => crate::logfile::clear_meeting_journals(&pool).await,
+        Err(_) => 0,
+    };
+    info!("Journal cleared ({recordings} recording journal(s) deleted)");
     Ok(())
 }
 

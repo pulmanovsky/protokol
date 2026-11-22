@@ -611,10 +611,41 @@ async fn push<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, report: serde_
         info!("Meet report #{n}: in call={in_call} streams={streams} tiles={tiles} speaking-class hits={hits} audio={ctx} page={page} changes={changes} minimised={minimised}");
         check_sign_in(&webview);
     }
+    window_state(&webview, &report);
     if report.get("landing").and_then(|v| v.as_bool()) == Some(true) {
         on_landing(&app);
     }
     Ok(live::on_report(&app, &report).await)
+}
+
+/// The Meet window as the last report saw it: in a call, page shown or
+/// hidden, window minimised, tiles on the page
+static WINDOW_STATE: Mutex<Option<(bool, String, bool, u64)>> = Mutex::new(None);
+
+/// A line in the journal whenever the Meet window's state changes (joined or
+/// left, page hidden or shown, minimised, people came or went). A page
+/// hidden during a call keeps the speakers from being told apart, so it gets
+/// its own code, MEET-HIDDEN.
+fn window_state<R: Runtime>(webview: &Webview<R>, report: &serde_json::Value) {
+    let in_call = report.get("inCall").and_then(|v| v.as_bool()).unwrap_or(false);
+    let page = report.get("visible").and_then(|v| v.as_str()).unwrap_or("?").chars().filter(|c| c.is_ascii_alphabetic()).take(12).collect::<String>();
+    let minimised = webview.window().is_minimized().unwrap_or(false);
+    let tiles = report.get("tiles").and_then(|t| t.as_u64()).unwrap_or(0);
+    let now = (in_call, page, minimised, tiles);
+    let before = {
+        let mut g = WINDOW_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        if g.as_ref() == Some(&now) {
+            return;
+        }
+        g.replace(now.clone())
+    };
+    let (in_call, page, minimised, tiles) = now;
+    let recording = crate::audio::recording_commands::recording_glance().is_some();
+    info!("MEET-WINDOW in call={in_call} page={page} minimised={minimised} tiles={tiles} recording={recording}");
+    let was_hidden = before.as_ref().map_or(false, |b| b.1 == "hidden" || b.2);
+    if in_call && (page == "hidden" || minimised) && !was_hidden {
+        warn!("MEET-HIDDEN the Meet page is {} during a call{}", if minimised { "in a minimised window" } else { "hidden" }, if recording { " while recording" } else { "" });
+    }
 }
 
 /// Meet's microphone button changed (true: off, false: on, null: no button

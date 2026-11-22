@@ -184,6 +184,8 @@ async fn run_retranscription<R: Runtime>(
     provider: Option<String>,
 ) -> Result<RetranscriptionResult> {
     let folder_path = PathBuf::from(&meeting_folder_path);
+    // This recording's journal takes the lines while it is recognised again
+    let _journal = crate::logfile::meeting_scope(&folder_path);
     let audio_path = find_audio_file(&folder_path)?;
 
     // Determine which provider to use (default to whisper)

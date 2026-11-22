@@ -48,6 +48,9 @@ pub(crate) fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {
             }
         }
         "check_updates" => check_updates_handler(app),
+        "mark_problem" => {
+            crate::report::mark_now(app, None, "menu-bar-icon");
+        }
         "quit" => app.exit(0),
         _ => {}
     }
@@ -383,6 +386,8 @@ fn build_menu<R: Runtime>(
     }
 
     builder
+        .item(&PredefinedMenuItem::separator(app)?)
+        .item(&MenuItemBuilder::with_id("mark_problem", "Позначити проблему").build(app)?)
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&MenuItemBuilder::with_id("open_window", "Відкрити Протокол").build(app)?)
         .item(&MenuItemBuilder::with_id("settings", "Налаштування…").build(app)?)

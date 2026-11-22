@@ -1,8 +1,11 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+
 /**
  * The parts of the recording capsule shared by the floating island and the
- * Google Meet window's toolbar: icons, level bars, the clock.
+ * Google Meet window's toolbar: icons, level bars, the clock, the mark button.
  */
 
 export const BAR_WEIGHTS = [0.55, 0.85, 1, 0.75, 0.5];
@@ -134,5 +137,52 @@ export function XIcon() {
     <svg width="12" height="12" viewBox="0 0 12 12" {...stroke} strokeWidth={1.7} aria-hidden="true">
       <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" />
     </svg>
+  );
+}
+
+export function FlagIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" {...stroke} strokeWidth={1.5} aria-hidden="true">
+      <path d="M3 12.5V1.8" />
+      <path d="M3 2.3h7.6L9 5l1.6 2.7H3" />
+    </svg>
+  );
+}
+
+function TickIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" {...stroke} strokeWidth={1.8} aria-hidden="true">
+      <path d="M2.8 7.3l2.7 2.7 5.7-5.9" />
+    </svg>
+  );
+}
+
+/**
+ * «Позначити проблему» in the capsule: the moment goes into the journal
+ * (logfile.rs, USER-MARK), with the detailed lines of the minutes before it.
+ * A tick for two seconds says the mark was made.
+ */
+export function MarkButton({ className, source }: { className: string; source: string }) {
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    if (!done) return;
+    const timer = setTimeout(() => setDone(false), 2000);
+    return () => clearTimeout(timer);
+  }, [done]);
+  const title = done ? 'Момент позначено в журналі' : 'Позначити проблему: цей момент буде видно в журналі';
+  return (
+    <button
+      type="button"
+      className={className}
+      onClick={() => {
+        invoke('api_journal_mark', { note: null, source })
+          .then(() => setDone(true))
+          .catch(() => {});
+      }}
+      title={title}
+      aria-label={title}
+    >
+      {done ? <TickIcon /> : <FlagIcon />}
+    </button>
   );
 }

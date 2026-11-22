@@ -52,6 +52,7 @@ pub mod app_menu;
 pub mod updates;
 pub mod logfile;
 pub mod feedback;
+pub mod report;
 pub mod identity;
 pub mod learned_events;
 pub mod waveform;
@@ -408,7 +409,8 @@ pub fn get_language_preference_internal() -> Option<String> {
 }
 
 pub fn run() {
-    log::set_max_level(log::LevelFilter::Info);
+    // The journal's level is set in logfile::init (our own lines down to
+    // debug, kept in memory as the black box; others from info)
 
     let mut builder = tauri::Builder::default();
 
@@ -458,8 +460,15 @@ pub fn run() {
                         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                     }
                     let _ = audio::recording_preferences::load_recording_preferences(&handle).await;
+                    // The chosen folder's path stays out of the journal
+                    logfile::set_recordings_folder(&audio::recording_preferences::recordings_folder());
                 });
             }
+            // The journal: what this Mac is (no names), and its sound devices' names hidden
+            std::thread::spawn(|| {
+                report::hide_devices_on_this_mac();
+                report::log_system();
+            });
             // The menu bar, as Mac apps have it
             #[cfg(target_os = "macos")]
             match app_menu::build(_app.handle()) {
@@ -912,6 +921,18 @@ pub fn run() {
             api::debug_backend_connection,
             api::open_external_url,
             feedback::api_feedback_info,
+            report::api_report_prepare,
+            report::api_report_open,
+            report::api_report_show_all,
+            report::api_report_discard,
+            report::api_report_save,
+            report::api_report_reveal,
+            report::api_report_share,
+            report::api_journal_mark,
+            report::api_journal_marks,
+            report::api_journal_ui,
+            report::api_journal_page,
+            report::api_journal_last_crash,
             // Custom OpenAI commands
             api::api_save_custom_openai_config,
             api::api_get_custom_openai_config,
@@ -1093,6 +1114,7 @@ pub fn run() {
                         }
                     });
                     log::info!("Application cleanup complete");
+                    logfile::clean_exit();
                 }
                 _ => {}
             }

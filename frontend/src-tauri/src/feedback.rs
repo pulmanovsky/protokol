@@ -1,6 +1,8 @@
-//! «Повідомити про проблему»: the technical facts the feedback form offers to attach.
-//! Nothing is sent from here: the form shows the text, and the person opens a
-//! prefilled GitHub issue themselves.
+//! «Запропонувати покращення» (and a public note about a problem): the facts
+//! the GitHub form offers to attach. Nothing is sent from here: the form shows
+//! the text, and the person opens a prefilled GitHub issue themselves. Journal
+//! lines never go to GitHub; they go only into a problem report saved on this
+//! Mac (see `report`).
 
 use serde::Serialize;
 use std::process::Command;
@@ -11,13 +13,9 @@ pub struct FeedbackInfo {
     pub mac_model: String,
     pub memory: String,
     pub free_disk: String,
-    /// Error lines from the log of the last day, scrubbed (see `scrub`)
-    pub log_errors: Vec<String>,
 }
 
-const MAX_LOG_LINES: usize = 20;
-
-fn run(cmd: &str, args: &[&str]) -> Option<String> {
+pub(crate) fn run(cmd: &str, args: &[&str]) -> Option<String> {
     let out = Command::new(cmd).args(args).output().ok()?;
     if !out.status.success() {
         return None;
@@ -41,7 +39,7 @@ pub(crate) fn hardware() -> (String, String) {
 }
 
 /// Free space on the disk that holds the home folder, «112 ГБ»
-fn free_disk() -> String {
+pub(crate) fn free_disk() -> String {
     let home = dirs::home_dir().map(|h| h.to_string_lossy().to_string()).unwrap_or_else(|| "/".into());
     run("df", &["-k", &home])
         .and_then(|out| {
@@ -79,31 +77,6 @@ pub(crate) fn scrub(line: &str, home: &str) -> String {
     s.chars().take(300).collect::<String>().trim_end().to_string()
 }
 
-/// ERROR lines of the last 24 hours, newest last
-fn log_errors() -> Vec<String> {
-    let Some(home) = dirs::home_dir() else { return vec![] };
-    let dir = home.join("Library/Logs").join(crate::identity::IDENTIFIER);
-    let since = (chrono::Utc::now() - chrono::Duration::hours(24)).format("%Y-%m-%dT%H:%M:%S").to_string();
-    let home_s = home.to_string_lossy().to_string();
-    let mut lines: Vec<String> = vec![];
-    for name in ["protokol.1.log", "protokol.log"] {
-        let Ok(text) = std::fs::read_to_string(dir.join(name)) else { continue };
-        for line in text.lines() {
-            if !line.contains(" ERROR ") || crate::logfile::private(line) {
-                continue;
-            }
-            // «[2026-11-11T09:41:07Z ERROR target] message»
-            let stamp = line.trim_start_matches('[').get(..19).unwrap_or("");
-            if stamp < since.as_str() {
-                continue;
-            }
-            lines.push(scrub(line, &home_s));
-        }
-    }
-    let skip = lines.len().saturating_sub(MAX_LOG_LINES);
-    lines.into_iter().skip(skip).collect()
-}
-
 #[tauri::command]
 pub async fn api_feedback_info() -> FeedbackInfo {
     tokio::task::spawn_blocking(|| {
@@ -113,7 +86,6 @@ pub async fn api_feedback_info() -> FeedbackInfo {
             mac_model,
             memory,
             free_disk: free_disk(),
-            log_errors: log_errors(),
         }
     })
     .await

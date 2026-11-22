@@ -6,14 +6,14 @@ import { getVersion } from '@tauri-apps/api/app';
 import { AlertTriangle } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { toast } from '@/lib/notice';
-import { FEEDBACK_EVENT, FEEDBACK_REPO, FeedbackKind } from '@/lib/feedback';
+import { FEEDBACK_EVENT, FEEDBACK_REPO, FeedbackKind, readModels } from '@/lib/feedback';
+import { ProblemReport } from '@/components/ProblemReport';
 
 interface Info {
   macos: string;
   mac_model: string;
   memory: string;
   free_disk: string;
-  log_errors: string[];
 }
 
 interface Facts {
@@ -27,7 +27,7 @@ const MAX_URL = 7500;
 
 const COPY: Record<FeedbackKind, { title: string; what: string; expected: string; whatHint: string; expectedHint: string }> = {
   problem: {
-    title: 'Повідомити про проблему',
+    title: 'Публічне звернення про проблему',
     what: 'Що сталося?',
     expected: 'Що мало статися?',
     whatHint: 'Наприклад: після завершення запису документ створився без підсумків доповідачів.',
@@ -45,13 +45,14 @@ const COPY: Record<FeedbackKind, { title: string; what: string; expected: string
 export function FeedbackDialog() {
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<FeedbackKind>('problem');
+  /** A problem: the report saved on this Mac, or the public GitHub form */
+  const [view, setView] = useState<'report' | 'github'>('report');
   const [what, setWhat] = useState('');
   const [expected, setExpected] = useState('');
   const [facts, setFacts] = useState<Facts | null>(null);
   const [withSystem, setWithSystem] = useState(true);
   const [withMac, setWithMac] = useState(true);
   const [withModels, setWithModels] = useState(true);
-  const [withLog, setWithLog] = useState(true);
   const [preview, setPreview] = useState(false);
 
   const setDefaults = (k: FeedbackKind) => {
@@ -60,13 +61,13 @@ export function FeedbackDialog() {
     setWithSystem(on);
     setWithMac(on);
     setWithModels(on);
-    setWithLog(on);
   };
 
   useEffect(() => {
     const onOpen = (e: Event) => {
       const k = ((e as CustomEvent<FeedbackKind>).detail ?? 'problem') as FeedbackKind;
       setKind(k);
+      setView(k === 'problem' ? 'report' : 'github');
       setDefaults(k);
       setWhat('');
       setExpected('');
@@ -77,62 +78,49 @@ export function FeedbackDialog() {
     return () => window.removeEventListener(FEEDBACK_EVENT, onOpen);
   }, []);
 
-  // The facts are read on this Mac each time the form opens
+  // The facts for the GitHub form are read on this Mac when it is shown
   useEffect(() => {
-    if (!open) return;
+    if (!open || view !== 'github') return;
     let alive = true;
     (async () => {
       const version = await getVersion().catch(() => '');
       const info = await invoke<Info>('api_feedback_info').catch(() => null);
-      const stt = await invoke<{ provider?: string; model?: string }>('api_get_transcript_config').catch(() => null);
-      const llm = await invoke<{ model?: string }>('api_get_model_config').catch(() => null);
-      const models = [stt?.model ? `розпізнавання: ${stt.provider === 'parakeet' ? 'Parakeet' : 'Whisper'} ${stt.model}` : '', llm?.model ? `документ: ${llm.model}` : '']
-        .filter(Boolean)
-        .join(' · ');
+      const models = await readModels();
       if (alive) setFacts({ version, info, models });
     })();
     return () => {
       alive = false;
     };
-  }, [open]);
+  }, [open, view]);
 
   const copy = COPY[kind];
-  const errors = facts?.info?.log_errors ?? [];
 
-  const build = useCallback(
-    (logLines: string[]) => {
-      const title = (what.trim().split('\n')[0] || copy.title).slice(0, 90);
-      const env: string[] = [];
-      if (withSystem) env.push(`- Протокол ${facts?.version ?? ''}${facts?.info?.macos ? `, ${facts.info.macos}` : ''}`);
-      if (withMac && facts?.info) env.push(`- ${[facts.info.mac_model, facts.info.memory && `${facts.info.memory} пам'яті`, facts.info.free_disk && `${facts.info.free_disk} вільно`].filter(Boolean).join(', ')}`);
-      if (withModels && facts?.models) env.push(`- Моделі: ${facts.models}`);
-      const parts = [
-        `## ${kind === 'problem' ? 'Що сталося' : 'Що покращити'}`,
-        what.trim() || '—',
-        '',
-        `## ${kind === 'problem' ? 'Що мало статися' : 'Для чого це потрібно'}`,
-        expected.trim() || '—',
-      ];
-      if (env.length) parts.push('', '## Середовище', ...env);
-      if (withLog && logLines.length) parts.push('', '## Помилки з журналу (остання доба)', '```', ...logLines, '```');
-      return { title, body: parts.join('\n') };
-    },
-    [what, expected, kind, copy.title, facts, withSystem, withMac, withModels, withLog],
-  );
+  const build = useCallback(() => {
+    const title = (what.trim().split('\n')[0] || copy.title).slice(0, 90);
+    const env: string[] = [];
+    if (withSystem) env.push(`- Протокол ${facts?.version ?? ''}${facts?.info?.macos ? `, ${facts.info.macos}` : ''}`);
+    if (withMac && facts?.info) env.push(`- ${[facts.info.mac_model, facts.info.memory && `${facts.info.memory} пам'яті`, facts.info.free_disk && `${facts.info.free_disk} вільно`].filter(Boolean).join(', ')}`);
+    if (withModels && facts?.models) env.push(`- Моделі: ${facts.models}`);
+    const parts = [
+      `## ${kind === 'problem' ? 'Що сталося' : 'Що покращити'}`,
+      what.trim() || '—',
+      '',
+      `## ${kind === 'problem' ? 'Що мало статися' : 'Для чого це потрібно'}`,
+      expected.trim() || '—',
+    ];
+    if (env.length) parts.push('', '## Середовище', ...env);
+    return { title, body: parts.join('\n') };
+  }, [what, expected, kind, copy.title, facts, withSystem, withMac, withModels]);
 
   const text = useMemo(() => {
-    const { title, body } = build(errors);
+    const { title, body } = build();
     return `Заголовок: ${title}\n\n${body}`;
-  }, [build, errors]);
+  }, [build]);
 
-  /** The link with as many log lines as fit; the newest lines are kept */
   const link = () => {
-    for (let skip = 0; skip <= errors.length; skip++) {
-      const { title, body } = build(errors.slice(skip));
-      const url = `${FEEDBACK_REPO}/issues/new?labels=${kind === 'problem' ? 'bug' : 'enhancement'}&title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
-      if (url.length <= MAX_URL) return { url, cut: skip > 0 };
-    }
-    return null;
+    const { title, body } = build();
+    const url = `${FEEDBACK_REPO}/issues/new?labels=${kind === 'problem' ? 'bug' : 'enhancement'}&title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
+    return url.length <= MAX_URL ? url : null;
   };
 
   const send = async () => {
@@ -140,16 +128,14 @@ export function FeedbackDialog() {
       toast.error(`Заповніть поле «${copy.what}»`);
       return;
     }
-    const made = link();
-    if (!made) {
+    const url = link();
+    if (!url) {
       // Too long for a link: the text goes to the clipboard, the page opens empty
       await navigator.clipboard?.writeText(text).catch(() => {});
-      const url = `${FEEDBACK_REPO}/issues/new`;
-      await invoke('open_external_url', { url }).catch(() => {});
+      await invoke('open_external_url', { url: `${FEEDBACK_REPO}/issues/new` }).catch(() => {});
       toast.info('Текст звернення скопійовано', { description: 'Вставте його у звернення за допомогою ⌘V.' });
     } else {
-      await invoke('open_external_url', { url: made.url }).catch(() => {});
-      if (made.cut) toast.info('Додано лише останні помилки з журналу', { description: 'Повний текст не вміщається в посилання.' });
+      await invoke('open_external_url', { url }).catch(() => {});
     }
     setOpen(false);
   };
@@ -168,7 +154,7 @@ export function FeedbackDialog() {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="sm:max-w-[640px] max-h-[88vh] flex flex-col">
         <div className="flex items-center justify-between gap-3 pr-6">
-          <DialogTitle>{preview ? 'Текст звернення' : copy.title}</DialogTitle>
+          <DialogTitle>{preview ? 'Текст звернення' : kind === 'problem' && view === 'report' ? 'Повідомити про проблему' : copy.title}</DialogTitle>
           {!preview && (
             <div className="step-switch" role="tablist" aria-label="Тип звернення">
               {(['problem', 'idea'] as const).map((k) => (
@@ -180,6 +166,7 @@ export function FeedbackDialog() {
                   data-on={kind === k}
                   onClick={() => {
                     setKind(k);
+                    setView(k === 'problem' ? 'report' : 'github');
                     setDefaults(k);
                   }}
                 >
@@ -190,8 +177,26 @@ export function FeedbackDialog() {
           )}
         </div>
         <DialogDescription className="sr-only">
-          Звернення не надсилається автоматично: відкривається заповнена сторінка на GitHub.
+          {view === 'report'
+            ? 'Звіт про проблему зберігається на цьому Mac і нікуди не надсилається автоматично.'
+            : 'Звернення не надсилається автоматично: відкривається заповнена сторінка на GitHub.'}
         </DialogDescription>
+
+        {view === 'report' ? (
+          <ProblemReport
+            what={what}
+            setWhat={setWhat}
+            expected={expected}
+            setExpected={setExpected}
+            onClose={() => setOpen(false)}
+            onPublic={() => {
+              setDefaults('problem');
+              setPreview(false);
+              setView('github');
+            }}
+          />
+        ) : (
+        <>
 
         {/* Only the middle scrolls: the buttons stay visible in a low window */}
         <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar -mx-1 px-1">
@@ -204,7 +209,7 @@ export function FeedbackDialog() {
               {text}
             </pre>
             <p className="text-xs text-[color:var(--muted-text)]">
-              У рядках журналу назви записів, імена, будь-який український текст і шляхи до файлів замінено. Сам журнал залишається на цьому Mac.
+              Рядки журналу до звернень на GitHub не додаються. Журнал можна передати лише у звіті про проблему, збереженому на цьому Mac.
             </p>
           </div>
         ) : (
@@ -235,12 +240,6 @@ export function FeedbackDialog() {
                 {check(withSystem, setWithSystem, 'Версія програми та macOS', [facts?.version && `Протокол ${facts.version}`, facts?.info?.macos].filter(Boolean).join(' · '))}
                 {check(withMac, setWithMac, "Модель Mac, пам'ять і вільне місце", [facts?.info?.mac_model, facts?.info?.memory && `${facts.info.memory} пам'яті`, facts?.info?.free_disk && `${facts.info.free_disk} вільно`].filter(Boolean).join(' · '))}
                 {check(withModels, setWithModels, 'Моделі на цьому Mac', facts?.models ?? '')}
-                {check(
-                  withLog,
-                  setWithLog,
-                  'Помилки з журналу за останню добу',
-                  !facts ? 'Читання журналу…' : errors.length ? `Рядків помилок: ${errors.length}. Назви записів, імена та шляхи до файлів замінено` : 'Помилок немає',
-                )}
               </div>
               <p className="text-xs text-[color:var(--muted-text)]">Тексти стенограм і документів, аудіо, назви записів та імена не додаються ніколи.</p>
             </div>
@@ -259,9 +258,16 @@ export function FeedbackDialog() {
               Назад
             </button>
           ) : (
-            <button type="button" className="settings-button" onClick={() => setPreview(true)}>
-              Переглянути текст…
-            </button>
+            <>
+              {kind === 'problem' && (
+                <button type="button" className="settings-button" onClick={() => setView('report')}>
+                  Назад до звіту
+                </button>
+              )}
+              <button type="button" className="settings-button" onClick={() => setPreview(true)}>
+                Переглянути текст…
+              </button>
+            </>
           )}
           <span className="flex-1" />
           {preview ? (
@@ -283,6 +289,8 @@ export function FeedbackDialog() {
             Відкрити на GitHub
           </button>
         </div>
+        </>
+        )}
       </DialogContent>
     </Dialog>
   );

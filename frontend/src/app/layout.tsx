@@ -24,6 +24,7 @@ import { ImportAudioDialog, ImportDropOverlay } from '@/components/ImportAudio'
 import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { MenuBridge } from '@/components/MenuBridge'
 import { FeedbackDialog } from '@/components/FeedbackDialog'
+import { JournalBridge, WindowErrors } from '@/components/JournalBridge'
 import { CalendarReminder } from '@/components/CalendarReminder'
 import { LearningPrompts } from '@/components/learning/LearningPrompts'
 import { MeetPrompt } from '@/components/MeetPrompt'
@@ -320,6 +321,7 @@ function MainLayout({
                               <DownloadProgressToastProvider />
                               <NoticeLayer onboarding={showOnboarding} />
                               <MenuBridge />
+                              <JournalBridge />
                               <FeedbackDialog />
 
                               {/* Show onboarding or main app */}
@@ -374,6 +376,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
         </head>
         <body className="island-body font-sans antialiased">
+          <WindowErrors name={(pathname ?? '').startsWith('/island') ? 'recording panel' : (pathname ?? '').startsWith('/meet-bar') ? 'meet toolbar' : 'meet offer'} />
           <ThemeProvider>{children}</ThemeProvider>
         </body>
       </html>
