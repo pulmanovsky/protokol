@@ -1296,7 +1296,7 @@ fn is_service_remark(sentence: &str) -> bool {
         return true;
     }
     // A word or two alone: only an answer like «Так.» or «Зрозумів.» is
-    // nothing for the minutes; «Втрат немає.» or «Орієнтир Дотик.» is the report
+    // nothing for the minutes; «Без змін.» or «Склад Північний.» is the report
     const REPLIES: &[&str] = &[
         "так", "ні", "добре", "гаразд", "зрозумів", "зрозуміла", "зрозуміло", "прийняв", "прийняла", "прийнято", "є", "слухаю", "ок", "окей", "ага", "угу", "ясно", "все", "дякую",
         "дуже", "вас", "тебе", "мене", "чути", "чую", "колеги", "панове", "пане", "вітаю", "привіт", "отже", "значить", "наступний", "далі",
@@ -1463,28 +1463,38 @@ fn topic_stems(text: &str) -> HashSet<String> {
         .collect()
 }
 
-/// «орієнтир липа» → «орієнтир Липа»: the word after «орієнтир» (any
-/// case form) is the landmark's name, and «Орієнтир» inside a sentence (a
-/// clause copied from where it opened one) is written small
-pub(crate) fn landmark_names(text: &str) -> String {
-    text.lines().map(landmark_names_in_line).collect::<Vec<_>>().join("\n")
+/// «вулиця франка» → «вулиця Франка» when the template lists «вулиця» among
+/// the words before a name: the word after it (any case form of it) is a
+/// name, and the word itself inside a sentence (a clause copied from where it
+/// opened one) is written small. No words, no change.
+pub(crate) fn names_after(text: &str, words: &[String]) -> String {
+    let words: Vec<String> = words.iter().map(|w| w.trim().to_lowercase()).filter(|w| w.chars().count() >= 3).collect();
+    if words.is_empty() {
+        return text.to_string();
+    }
+    text.lines().map(|l| names_after_in_line(l, &words)).collect::<Vec<_>>().join("\n")
 }
 
-fn landmark_names_in_line(line: &str) -> String {
-    let is_landmark = |w: &str| w.trim_matches(|c: char| !c.is_alphabetic()).to_lowercase().starts_with("орієнтир");
+fn names_after_in_line(line: &str, markers: &[String]) -> String {
+    let is_marker = |w: &str| {
+        let bare = w.trim_matches(|c: char| !c.is_alphabetic()).to_lowercase();
+        markers.iter().any(|m| bare.starts_with(m.as_str()))
+    };
     let words: Vec<&str> = line.split(' ').collect();
     let mut out: Vec<String> = Vec::with_capacity(words.len());
     for (i, w) in words.iter().enumerate() {
         let mut word = w.to_string();
         let prev = if i > 0 { words[i - 1] } else { "" };
         let opens = i == 0 || prev == "-" || prev.ends_with(['.', '!', '?', '…']) || prev.is_empty();
-        if is_landmark(w) && !opens && w.starts_with('О') {
-            word = format!("о{}", &w['О'.len_utf8()..]);
+        if is_marker(w) && !opens {
+            if let Some(first) = w.chars().next().filter(|c| c.is_uppercase()) {
+                word = first.to_lowercase().chain(w.chars().skip(1)).collect();
+            }
         }
-        // «орієнтир для …», «орієнтиром є …»: a guide, not a place
+        // «вулиця для …», «вулицею є …»: not followed by a name
         const NOT_A_NAME: &[&str] = &["для", "на", "по", "до", "від", "що", "це", "є", "був", "була", "буде", "не", "та", "і", "й", "в", "у", "з", "із", "зі", "за", "при", "під", "над", "між", "біля", "якого", "який", "яка", "які"];
         let bare = w.trim_matches(|c: char| !c.is_alphabetic()).to_lowercase();
-        if i > 0 && is_landmark(prev) && !prev.ends_with([',', '.', ';', ':']) && !NOT_A_NAME.contains(&bare.as_str()) {
+        if i > 0 && is_marker(prev) && !prev.ends_with([',', '.', ';', ':']) && !NOT_A_NAME.contains(&bare.as_str()) {
             if let Some(first) = w.chars().next() {
                 if first.is_lowercase() && first.is_alphabetic() {
                     word = first.to_uppercase().chain(w.chars().skip(1)).collect();
@@ -1606,7 +1616,7 @@ pub(crate) fn speaker_block_prompt(speaker: &str, said: &str, points: usize, det
 
 Склади {kind} виклад сказаного: головне з доповіді, проблеми, пропозиції, завдання, які дано або взято (кому і який термін, лише якщо це названо). {merge}
 Не більше {points} пунктів, кожен не довший за {words} слів, у форматі «- текст [ММ:СС]», де мітка часу — того рядка, де це прозвучало. Пункти в тому самому порядку, у якому це прозвучало: не переставляй сказане із середини в кінець.
-Кожен пункт — завершена думка, а не обірваний шматок речення. Пиши словами доповідача: не замінюй і не пропускай назв, псевдонімів, орієнтирів, населених пунктів, номерів підрозділів і техніки; числа пиши цифрами, дати й імена дослівно. Нічого не додавай від себе й не роби висновків. Не бери привітань, подяк, перекличок і реплік про звук. Не пиши вступу, заголовків чи імені доповідача. Виведи лише пункти українською."#
+Кожен пункт — завершена думка, а не обірваний шматок речення. Пиши словами доповідача: не замінюй і не пропускай назв, імен, псевдонімів, місць, номерів і позначень; числа пиши цифрами, дати й імена дослівно. Нічого не додавай від себе й не роби висновків. Не бери привітань, подяк, перекличок і реплік про звук. Не пиши вступу, заголовків чи імені доповідача. Виведи лише пункти українською."#
     )
 }
 
@@ -2526,9 +2536,9 @@ mod tests {
         assert_eq!(working_lines(&lines), vec![(5, "Отримали 5 генераторів.".to_string())]);
         assert_eq!(clean_points("- Всім гарного дня [00:10]\n- Отримано 5 генераторів [00:12]\n- Отримано 5 генераторів [00:13]\n- Це нікого не їбе [00:13]\n- Пане Тест [00:14]"), "- Отримано 5 генераторів [00:12]");
         // A short report line is kept; an answer alone is not; «кораблями» is not swearing
-        let lines = vec![(5, "Втрат немає. Так. Орієнтир Дотик.".to_string()), (9, "Зрозумів.".to_string())];
-        assert_eq!(working_lines(&lines), vec![(5, "Втрат немає. Орієнтир Дотик.".to_string())]);
-        assert_eq!(clean_points("- Втрат немає [00:05]\n- Удари по кораблями і рублями [00:06]"), "- Втрат немає [00:05]\n- Удари по кораблями і рублями [00:06]");
+        let lines = vec![(5, "Без змін. Так. Склад Північний.".to_string()), (9, "Зрозумів.".to_string())];
+        assert_eq!(working_lines(&lines), vec![(5, "Без змін. Склад Північний.".to_string())]);
+        assert_eq!(clean_points("- Без змін [00:05]\n- Доставка кораблями, оплата рублями [00:06]"), "- Без змін [00:05]\n- Доставка кораблями, оплата рублями [00:06]");
         // Points in the order they were said: one from the middle stays in the middle
         assert_eq!(
             in_said_order("- А [00:10]\n- В [01:30]\n- Б [00:40, 02:00]\n- без часу\n- Г [01:50] ⟨?⟩"),
@@ -2577,13 +2587,15 @@ mod tests {
         let (text, kept) = keep_numbers("- Прибуло 20 машин [00:10]", &[(150, "Це дорога М-20 на північ.".to_string())]);
         assert_eq!(kept, NumbersKept { appended: 0, added: 1, left: 0 });
         assert!(text.lines().any(|l| l.contains("дорога М-20") && l.ends_with("[02:30]")), "{text}");
-        // Landmarks: the name after «орієнтир» is a name; «Орієнтир» mid-sentence is small
+        // Words before a name from the template: the next word is a name; the word mid-sentence is small
+        let streets = vec!["вулиця".to_string()];
         assert_eq!(
-            landmark_names("- Маршрут: Орієнтир липа – 3 км; Орієнтир вишня – 1 км [02:10]\n- Орієнтир сосна без змін [02:20]"),
-            "- Маршрут: орієнтир Липа – 3 км; орієнтир Вишня – 1 км [02:10]\n- Орієнтир Сосна без змін [02:20]"
+            names_after("- Маршрут: Вулиця липова – 3 км; Вулиця садова – 1 км [02:10]\n- Вулиця соснова без змін [02:20]", &streets),
+            "- Маршрут: вулиця Липова – 3 км; вулиця Садова – 1 км [02:10]\n- Вулиця Соснова без змін [02:20]"
         );
-        assert_eq!(landmark_names("- На орієнтирі, де стоїть знак [00:10]"), "- На орієнтирі, де стоїть знак [00:10]");
-        assert_eq!(landmark_names("- Це орієнтир для всіх [00:10]"), "- Це орієнтир для всіх [00:10]");
+        assert_eq!(names_after("- На вулиці, де стоїть знак [00:10]", &streets), "- На вулиці, де стоїть знак [00:10]");
+        assert_eq!(names_after("- Це вулиця для всіх [00:10]", &streets), "- Це вулиця для всіх [00:10]");
+        assert_eq!(names_after("- Вулиця липова [00:10]", &[]), "- Вулиця липова [00:10]");
         // A number said in words backs the digits; one nobody said is marked
         let said = super::super::numbers::Said::of("отримали двадцять генераторів");
         let (text, n) = mark_unbacked_numbers("- Отримали 20 генераторів [00:10]\n- Отримали 35 генераторів [00:20]", &said, &said);

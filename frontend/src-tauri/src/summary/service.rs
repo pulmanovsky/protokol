@@ -69,10 +69,6 @@ struct SummaryCacheSource {
     model_provider: String,
     model_name: String,
     ollama_endpoint: Option<String>,
-    custom_openai_endpoint: Option<String>,
-    max_tokens: Option<u32>,
-    temperature: Option<f32>,
-    top_p: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -104,10 +100,6 @@ fn build_summary_cache_source(
     model_provider: &str,
     model_name: &str,
     ollama_endpoint: Option<&str>,
-    custom_openai_endpoint: Option<&str>,
-    max_tokens: Option<u32>,
-    temperature: Option<f32>,
-    top_p: Option<f32>,
 ) -> SummaryCacheSource {
     SummaryCacheSource {
         transcript_fingerprint: stable_text_fingerprint(text),
@@ -118,10 +110,6 @@ fn build_summary_cache_source(
         model_provider: model_provider.to_string(),
         model_name: model_name.to_string(),
         ollama_endpoint: ollama_endpoint.map(str::to_string),
-        custom_openai_endpoint: custom_openai_endpoint.map(str::to_string),
-        max_tokens,
-        temperature,
-        top_p,
     }
 }
 
@@ -368,25 +356,8 @@ impl SummaryService {
             }
         };
 
-        // Validate and setup api_key, Flexible for Ollama, BuiltInAI, and CustomOpenAI
-        let api_key = if provider == LLMProvider::Ollama || provider == LLMProvider::BuiltInAI || provider == LLMProvider::CustomOpenAI {
-            // These providers don't require API keys from the standard database column
-            String::new()
-        } else {
-            match SettingsRepository::get_api_key(&pool, &model_provider).await {
-                Ok(Some(key)) if !key.is_empty() => key,
-                Ok(None) | Ok(Some(_)) => {
-                    let err_msg = format!("API key not found for {}", &model_provider);
-                    Self::fail_and_cleanup(&pool, &meeting_id, started_at, &err_msg).await;
-                    return;
-                }
-                Err(e) => {
-                    let err_msg = format!("Failed to retrieve API key for {}: {}", &model_provider, e);
-                    Self::fail_and_cleanup(&pool, &meeting_id, started_at, &err_msg).await;
-                    return;
-                }
-            }
-        };
+        // Both providers run on this Mac and need no API key
+        let final_api_key = String::new();
 
         // Get Ollama endpoint if provider is Ollama
         let ollama_endpoint = if provider == LLMProvider::Ollama {
@@ -400,42 +371,6 @@ impl SummaryService {
             }
         } else {
             None
-        };
-
-        // Get CustomOpenAI config if provider is CustomOpenAI
-        let (custom_openai_endpoint, custom_openai_api_key, custom_openai_max_tokens, custom_openai_temperature, custom_openai_top_p) =
-            if provider == LLMProvider::CustomOpenAI {
-                match SettingsRepository::get_custom_openai_config(&pool).await {
-                    Ok(Some(config)) => {
-                        info!("✓ Using custom OpenAI endpoint: {}", config.endpoint);
-                        (
-                            Some(config.endpoint),
-                            config.api_key,
-                            config.max_tokens.map(|t| t as u32),
-                            config.temperature,
-                            config.top_p,
-                        )
-                    }
-                    Ok(None) => {
-                        let err_msg = "Custom OpenAI provider selected but no configuration found";
-                        Self::fail_and_cleanup(&pool, &meeting_id, started_at, err_msg).await;
-                        return;
-                    }
-                    Err(e) => {
-                        let err_msg = format!("Failed to retrieve custom OpenAI config: {}", e);
-                        Self::fail_and_cleanup(&pool, &meeting_id, started_at, &err_msg).await;
-                        return;
-                    }
-                }
-            } else {
-                (None, None, None, None, None)
-            };
-
-        // For CustomOpenAI, use its API key (if any) instead of the empty string
-        let final_api_key = if provider == LLMProvider::CustomOpenAI {
-            custom_openai_api_key.unwrap_or_default()
-        } else {
-            api_key
         };
 
         // Dynamically fetch context size based on provider and model
@@ -458,8 +393,8 @@ impl SummaryService {
                     4000  // Fallback to safe default
                 }
             }
-        } else if provider == LLMProvider::BuiltInAI {
-            // Get model's context size from registry
+        } else {
+            // Built-in model: context size from the registry
             use crate::summary::summary_engine::models;
             let model = models::get_model_by_name(&model_name)
                 .ok_or_else(|| format!("Unknown model: {}", model_name));
@@ -479,9 +414,6 @@ impl SummaryService {
                     1748  // 2048 - 300 for overhead
                 }
             }
-        } else {
-            // Cloud providers (OpenAI, Claude, Groq, CustomOpenAI) handle large contexts automatically
-            100000  // Effectively unlimited for single-pass processing
         };
 
         // Get app data directory for BuiltInAI provider
@@ -519,10 +451,6 @@ impl SummaryService {
             &model_provider,
             &model_name,
             ollama_endpoint.as_deref(),
-            custom_openai_endpoint.as_deref(),
-            custom_openai_max_tokens,
-            custom_openai_temperature,
-            custom_openai_top_p,
         );
 
         let cached_english = match SummaryProcessesRepository::get_summary_data(&pool, &meeting_id).await {
@@ -622,10 +550,6 @@ impl SummaryService {
             &template,
             token_threshold,
             ollama_endpoint.as_deref(),
-            custom_openai_endpoint.as_deref(),
-            custom_openai_max_tokens,
-            custom_openai_temperature,
-            custom_openai_top_p,
             app_data_dir.as_ref(),
             Some(&cancellation_token),
             summary_language.as_deref(),
@@ -930,10 +854,6 @@ mod tests {
             "ollama",
             "gemma3:1b",
             Some("http://localhost:11434"),
-            None,
-            None,
-            None,
-            None,
         )
     }
 
@@ -1042,10 +962,6 @@ mod tests {
                 "ollama",
                 "gemma3:1b",
                 Some("http://localhost:11434"),
-                None,
-                None,
-                None,
-                None,
             ),
             build_summary_cache_source(
                 "transcript body",
@@ -1056,10 +972,6 @@ mod tests {
                 "ollama",
                 "gemma3:1b",
                 Some("http://localhost:11434"),
-                None,
-                None,
-                None,
-                None,
             ),
             build_summary_cache_source(
                 "transcript body",
@@ -1070,10 +982,6 @@ mod tests {
                 "ollama",
                 "gemma3:1b",
                 Some("http://localhost:11434"),
-                None,
-                None,
-                None,
-                None,
             ),
             build_summary_cache_source(
                 "transcript body",
@@ -1084,10 +992,6 @@ mod tests {
                 "openai",
                 "gemma3:1b",
                 Some("http://localhost:11434"),
-                None,
-                None,
-                None,
-                None,
             ),
             build_summary_cache_source(
                 "transcript body",
@@ -1098,10 +1002,6 @@ mod tests {
                 "ollama",
                 "qwen2.5:3b",
                 Some("http://localhost:11434"),
-                None,
-                None,
-                None,
-                None,
             ),
             build_summary_cache_source(
                 "transcript body",
@@ -1112,24 +1012,6 @@ mod tests {
                 "ollama",
                 "gemma3:1b",
                 Some("http://localhost:11500"),
-                None,
-                None,
-                None,
-                None,
-            ),
-            build_summary_cache_source(
-                "transcript body",
-                "custom prompt",
-                "standard_meeting",
-                &template_fingerprint,
-                3700,
-                "ollama",
-                "gemma3:1b",
-                Some("http://localhost:11434"),
-                Some("https://custom.example/v1"),
-                Some(2048),
-                Some(0.2),
-                Some(0.9),
             ),
         ];
 

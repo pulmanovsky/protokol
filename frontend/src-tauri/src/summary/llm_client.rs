@@ -36,12 +36,6 @@ pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<&'static str>,
 }
 
@@ -51,15 +45,7 @@ pub fn build_openai_compat_chat_body(
     model_name: &str,
     system_prompt: &str,
     user_prompt: &str,
-    max_tokens: Option<u32>,
-    temperature: Option<f32>,
-    top_p: Option<f32>,
 ) -> serde_json::Value {
-    let (max_tokens_val, temperature_val, top_p_val) = if *provider == LLMProvider::CustomOpenAI {
-        (max_tokens, temperature, top_p)
-    } else {
-        (None, None, None)
-    };
 
     serde_json::json!(ChatRequest {
         model: model_name.to_string(),
@@ -73,9 +59,6 @@ pub fn build_openai_compat_chat_body(
                 content: user_prompt.to_string(),
             }
         ],
-        max_tokens: max_tokens_val,
-        temperature: temperature_val,
-        top_p: top_p_val,
         reasoning_effort: (*provider == LLMProvider::Ollama).then_some("none"),
     })
 }
@@ -172,13 +155,12 @@ pub(crate) fn ollama_rejects_reasoning_effort(status: reqwest::StatusCode, body:
 }
 /// LLM Provider enumeration for multi-provider support
 #[derive(Debug, Clone, PartialEq)]
-/// Only models on this Mac: the built-in one, Ollama on localhost, or
-/// another local server with an OpenAI-compatible API. Cloud services are
-/// not supported, so a transcript never leaves the computer.
+/// Only models on this Mac: the built-in one or Ollama on localhost. Cloud
+/// services and other servers are not supported, so a transcript never
+/// leaves the computer.
 pub enum LLMProvider {
     Ollama,
     BuiltInAI,
-    CustomOpenAI,
 }
 
 impl LLMProvider {
@@ -187,9 +169,8 @@ impl LLMProvider {
         match s.to_lowercase().as_str() {
             "ollama" => Ok(Self::Ollama),
             "builtin-ai" | "local-llama" | "localllama" => Ok(Self::BuiltInAI),
-            "custom-openai" => Ok(Self::CustomOpenAI),
-            "openai" | "claude" | "groq" | "openrouter" => {
-                Err("Хмарні моделі не підтримуються: документ створюється лише на цьому Mac. Оберіть вбудовану модель у Параметрах.".to_string())
+            "openai" | "claude" | "groq" | "openrouter" | "custom-openai" => {
+                Err("Хмарні моделі та сторонні сервери не підтримуються: документ створюється лише на цьому Mac. Оберіть вбудовану модель у Налаштуваннях.".to_string())
             }
             _ => Err(format!("Unsupported LLM provider: {}", s)),
         }
@@ -214,10 +195,6 @@ fn is_local_url(url: &str) -> bool {
 /// * `system_prompt` - System instructions for the LLM
 /// * `user_prompt` - User query/content to process
 /// * `ollama_endpoint` - Optional custom Ollama endpoint (defaults to localhost:11434)
-/// * `custom_openai_endpoint` - Optional custom OpenAI-compatible endpoint
-/// * `max_tokens` - Optional max tokens (for CustomOpenAI provider)
-/// * `temperature` - Optional temperature (for CustomOpenAI provider)
-/// * `top_p` - Optional top_p (for CustomOpenAI provider)
 /// * `app_data_dir` - Optional app data directory (for BuiltInAI provider)
 /// * `cancellation_token` - Optional token to cancel the request
 ///
@@ -230,10 +207,6 @@ pub(crate) async fn generate_summary(
     system_prompt: &str,
     user_prompt: &str,
     ollama_endpoint: Option<&str>,
-    custom_openai_endpoint: Option<&str>,
-    max_tokens: Option<u32>,
-    temperature: Option<f32>,
-    top_p: Option<f32>,
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
 ) -> Result<LlmCompletion, String> {
@@ -274,14 +247,6 @@ pub(crate) async fn generate_summary(
                 header::HeaderMap::new(),
             )
         }
-        LLMProvider::CustomOpenAI => {
-            let endpoint = custom_openai_endpoint
-                .ok_or_else(|| "Custom OpenAI endpoint not configured".to_string())?;
-            (
-                format!("{}/chat/completions", endpoint.trim_end_matches('/')),
-                header::HeaderMap::new(),
-            )
-        }
         LLMProvider::BuiltInAI => {
             // This case is handled earlier with early returns
             unreachable!("BuiltInAI is handled before this match statement")
@@ -315,9 +280,6 @@ pub(crate) async fn generate_summary(
         model_name,
         system_prompt,
         user_prompt,
-        max_tokens,
-        temperature,
-        top_p,
     );
 
     info!("🐞 LLM Request to {}: model={}", provider_name(provider), model_name);
@@ -485,22 +447,19 @@ mod tests {
     }
 
     #[test]
-    fn only_ollama_disables_reasoning_and_custom_sampling_is_preserved() {
-        for provider in [LLMProvider::CustomOpenAI] {
-            assert!(build_openai_compat_chat_body(&provider, "model", "sys", "user", None, None, None)
-                .get("reasoning_effort")
-                .is_none());
-        }
-        let ollama = build_openai_compat_chat_body(
-            &LLMProvider::Ollama, "model", "sys", "user", None, None, None,
-        );
+    fn ollama_disables_reasoning() {
+        let ollama = build_openai_compat_chat_body(&LLMProvider::Ollama, "model", "sys", "user");
         assert_eq!(ollama["reasoning_effort"], "none");
-        let custom = build_openai_compat_chat_body(
-            &LLMProvider::CustomOpenAI, "model", "sys", "user", Some(12), Some(0.3), Some(0.8),
-        );
-        assert_eq!(custom["max_tokens"], 12);
-        assert_eq!(custom["temperature"].as_f64(), Some(0.3_f32 as f64));
-        assert_eq!(custom["top_p"].as_f64(), Some(0.8_f32 as f64));
+        assert!(ollama.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn other_servers_are_refused() {
+        for name in ["custom-openai", "openai", "claude", "groq", "openrouter"] {
+            assert!(LLMProvider::from_str(name).is_err(), "{name}");
+        }
+        assert_eq!(LLMProvider::from_str("ollama"), Ok(LLMProvider::Ollama));
+        assert_eq!(LLMProvider::from_str("builtin-ai"), Ok(LLMProvider::BuiltInAI));
     }
 
     #[test]
@@ -622,10 +581,6 @@ mod tests {
             "user",
             Some(&endpoint),
             None,
-            None,
-            None,
-            None,
-            None,
             Some(&cancellation_token),
         );
         tokio::pin!(generation);
@@ -708,10 +663,6 @@ mod tests {
             "user",
             Some(&endpoint),
             None,
-            None,
-            None,
-            None,
-            None,
             Some(&cancellation_token),
         );
         tokio::pin!(generation);
@@ -786,10 +737,6 @@ mod tests {
                 "user",
                 Some(&endpoint),
                 None,
-                None,
-                None,
-                None,
-                None,
                 Some(&cancellation_token),
             ),
         )
@@ -814,7 +761,6 @@ fn provider_name(provider: &LLMProvider) -> &str {
     match provider {
         LLMProvider::Ollama => "Ollama",
         LLMProvider::BuiltInAI => "Built-in AI",
-        LLMProvider::CustomOpenAI => "Custom OpenAI",
     }
 }
 

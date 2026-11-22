@@ -467,6 +467,12 @@ pub async fn api_learning_report(app: AppHandle, state: tauri::State<'_, crate::
         checked_hours: checked_hours(state.db_manager.pool()).await,
         history: versions::history(&p.models),
         auto_fixes: Some((applied, undone)),
+        edits: super::corrected::quality(state.db_manager.pool(), &p.models, MODEL_FILE).await.ok().map(|q| {
+            let newest: Vec<_> = q.meetings.iter().rev().take(super::corrected::REPORTED).collect();
+            let mut e = super::corrected::Edits::default();
+            newest.iter().for_each(|m| e.add(&m.edits));
+            (newest.len(), newest.iter().map(|m| m.words).sum(), e)
+        }),
     }))
 }
 

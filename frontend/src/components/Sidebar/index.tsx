@@ -8,7 +8,6 @@ import type { CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
 import { confirmNative } from '@/lib/confirm';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { TranscriptModelProps } from '@/components/TranscriptSettings';
-import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/lib/notice';
@@ -189,7 +188,6 @@ const Sidebar: React.FC = () => {
       await emit('model-config-updated', config);
 
       // Track settings change
-      await Analytics.trackSettingsChanged('model_config', `${config.provider}_${config.model}`);
     } catch (error) {
       console.error('Error saving model config:', error);
       setSettingsSaveSuccess(false);
@@ -214,10 +212,6 @@ const Sidebar: React.FC = () => {
 
 
       setSettingsSaveSuccess(true);
-
-      // Track settings change
-      const transcriptConfigToSave = updatedConfig || transcriptModelConfig;
-      await Analytics.trackSettingsChanged('transcript_config', `${transcriptConfigToSave.provider}_${transcriptConfigToSave.model}`);
     } catch (error) {
       console.error('Failed to save transcript config:', error);
       setSettingsSaveSuccess(false);
@@ -321,7 +315,6 @@ const Sidebar: React.FC = () => {
       setMeetings(updatedMeetings);
 
       // Track meeting deletion
-      Analytics.trackMeetingDeleted(itemId);
 
       // Show success toast
       toast.success("Запис видалено", {
@@ -387,7 +380,6 @@ const Sidebar: React.FC = () => {
       }
 
       // Track the edit
-      Analytics.trackButtonClick('edit_meeting_title', 'sidebar');
 
       toast.success("Назву змінено");
 

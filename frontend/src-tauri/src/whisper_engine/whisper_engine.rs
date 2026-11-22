@@ -1245,30 +1245,31 @@ impl WhisperEngine {
     pub async fn download_model(&self, model_name: &str, progress_callback: Option<DownloadProgressCallback>) -> Result<()> {
         log::info!("Starting download for model: {}", model_name);
 
-        let model_url = match model_name {
-            "tiny" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
-            "base" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
-            "small" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
-            "medium" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
-            "large-v3-turbo" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
-            "large-v3-turbo-q8_0" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin",
-            "large-v3" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
-            "tiny-q5_1" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin",
-            "base-q5_1" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
-            "small-q5_1" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
-            "medium-q5_0" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
-            "large-v3-turbo-q5_0" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
-            "large-v3-q5_0" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin",
-            _ => return Err(anyhow!("Unsupported model: {}", model_name)),
-        };
+        // Only the models offered in Settings, each pinned to one revision
+        // and checked against its known SHA-256 once downloaded
+        let source = crate::config::whisper_model_source(model_name)
+            .ok_or_else(|| anyhow!("Unsupported model: {}", model_name))?;
 
-        self.download_model_from_url(model_name, model_url, progress_callback).await
+        self.download_checked(model_name, &source.url(), Some(source.sha256), progress_callback).await
     }
 
+    #[cfg(test)]
     async fn download_model_from_url(
         &self,
         model_name: &str,
         model_url: &str,
+        progress_callback: Option<DownloadProgressCallback>,
+    ) -> Result<()> {
+        self.download_checked(model_name, model_url, None, progress_callback).await
+    }
+
+    /// Downloads `model_url`; with `expected_sha256` a file whose content
+    /// differs (damaged or replaced on the way) is deleted and refused
+    async fn download_checked(
+        &self,
+        model_name: &str,
+        model_url: &str,
+        expected_sha256: Option<&str>,
         progress_callback: Option<DownloadProgressCallback>,
     ) -> Result<()> {
         let active_download = self.reserve_active_download(model_name).await?;
@@ -1280,6 +1281,7 @@ impl WhisperEngine {
                 model_url,
                 &file_path,
                 &active_download,
+                expected_sha256,
                 progress_callback,
             )
             .await;
@@ -1294,6 +1296,7 @@ impl WhisperEngine {
         model_url: &str,
         file_path: &PathBuf,
         active_download: &ActiveDownload,
+        expected_sha256: Option<&str>,
         progress_callback: Option<DownloadProgressCallback>,
     ) -> Result<()> {
         if active_download.cancellation.is_cancelled() {
@@ -1335,6 +1338,7 @@ impl WhisperEngine {
 
         use futures_util::StreamExt;
         let mut stream = response.bytes_stream();
+        let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
         let mut downloaded = 0u64;
         let mut last_progress_report = 0u8;
         let mut last_report_time = std::time::Instant::now();
@@ -1362,6 +1366,7 @@ impl WhisperEngine {
             file.write_all(&chunk)
                 .await
                 .map_err(|e| anyhow!("Failed to write chunk to file: {}", e))?;
+            sha2::Digest::update(&mut hasher, &chunk);
 
             downloaded += chunk.len() as u64;
             let progress = if total_size > 0 {
@@ -1405,6 +1410,16 @@ impl WhisperEngine {
             return Err(DownloadCancelled.into());
         }
 
+        if let Some(expected) = expected_sha256 {
+            let actual = format!("{:x}", sha2::Digest::finalize(hasher));
+            if !actual.eq_ignore_ascii_case(expected) {
+                log::error!("Model {} failed the checksum: got {}, expected {}", model_name, actual, expected);
+                return Err(anyhow!(
+                    "Файл моделі пошкоджено під час завантаження. Спробуйте завантажити ще раз."
+                ));
+            }
+            log::info!("Model {} checksum verified", model_name);
+        }
 
         Ok(())
     }
@@ -1976,6 +1991,36 @@ mod tests {
         assert!(!model_path.exists());
         let models = engine.discover_models().await.unwrap();
         assert!(matches!(tiny_model(&models).status, ModelStatus::Missing));
+    }
+
+    #[tokio::test]
+    async fn a_file_with_another_checksum_is_refused_and_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = WhisperEngine::new_with_models_dir(Some(dir.path().to_path_buf())).unwrap();
+        let model_path = dir.path().join("ggml-large-v3-turbo-q8_0.bin");
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nggml\0\0\0\0")
+                .await
+                .unwrap();
+        });
+
+        let expected = crate::config::whisper_model_source("large-v3-turbo-q8_0").unwrap().sha256;
+        let error = engine
+            .download_checked("large-v3-turbo-q8_0", &format!("http://{address}/model.bin"), Some(expected), None)
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+
+        assert!(error.to_string().contains("пошкоджено"), "{error}");
+        assert!(!model_path.exists());
+        assert!(!engine.active_downloads.lock().await.contains_key("large-v3-turbo-q8_0"));
     }
 }
 

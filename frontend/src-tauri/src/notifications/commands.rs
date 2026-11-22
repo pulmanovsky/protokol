@@ -150,22 +150,6 @@ pub async fn set_manual_dnd(
     }
 }
 
-/// Set user consent for notifications
-#[tauri::command]
-pub async fn set_notification_consent(
-    consent: bool,
-    manager_state: State<'_, NotificationManagerState<Wry>>
-) -> Result<(), String> {
-    log_info!("Setting notification consent: {}", consent);
-
-    let manager_lock = manager_state.read().await;
-    if let Some(manager) = manager_lock.as_ref() {
-        manager.set_consent(consent).await
-            .map_err(|e| format!("Failed to set consent: {}", e))
-    } else {
-        Err("Notification manager not initialized".to_string())
-    }
-}
 
 /// Clear all notifications
 #[tauri::command]
@@ -183,18 +167,6 @@ pub async fn clear_notifications(
     }
 }
 
-/// Check if notification system is ready
-#[tauri::command]
-pub async fn is_notification_system_ready(
-    manager_state: State<'_, NotificationManagerState<Wry>>
-) -> Result<bool, String> {
-    let manager_lock = manager_state.read().await;
-    if let Some(manager) = manager_lock.as_ref() {
-        Ok(manager.is_ready().await)
-    } else {
-        Ok(false)
-    }
-}
 
 /// Initialize notification manager manually (for testing and ensuring it's ready)
 #[tauri::command]
@@ -225,58 +197,7 @@ pub async fn initialize_notification_manager_manual(
     }
 }
 
-/// Test notification with automatic consent for development/testing
-#[tauri::command]
-pub async fn test_notification_with_auto_consent(
-    app: AppHandle<Wry>,
-    manager_state: State<'_, NotificationManagerState<Wry>>
-) -> Result<(), String> {
-    log_info!("Testing notification with automatic consent");
 
-    // First ensure manager is initialized
-    let manager_lock = manager_state.read().await;
-    if manager_lock.is_none() {
-        drop(manager_lock);
-        if let Err(e) = initialize_notification_manager_manual(app.clone(), manager_state.clone()).await {
-            return Err(format!("Failed to initialize manager: {}", e));
-        }
-    } else {
-        drop(manager_lock);
-    }
-
-    // Get the manager again
-    let manager_lock = manager_state.read().await;
-    if let Some(manager) = manager_lock.as_ref() {
-        // Set consent and permissions automatically for testing
-        if let Err(e) = manager.set_consent(true).await {
-            log_error!("Failed to set consent: {}", e);
-        }
-        if let Err(e) = manager.request_permission().await {
-            log_error!("Failed to request permission: {}", e);
-        }
-
-        // Show test notification
-        manager.show_test_notification().await
-            .map_err(|e| format!("Failed to show test notification: {}", e))
-    } else {
-        Err("Manager still not initialized".to_string())
-    }
-}
-
-/// Get notification system statistics
-#[tauri::command]
-pub async fn get_notification_stats(
-    manager_state: State<'_, NotificationManagerState<Wry>>
-) -> Result<serde_json::Value, String> {
-    let manager_lock = manager_state.read().await;
-    if let Some(manager) = manager_lock.as_ref() {
-        let stats = manager.get_stats().await;
-        serde_json::to_value(stats)
-            .map_err(|e| format!("Failed to serialize stats: {}", e))
-    } else {
-        Err("Notification manager not initialized".to_string())
-    }
-}
 
 // Helper functions for showing specific notification types
 // These are used internally by the app and don't need to be Tauri commands

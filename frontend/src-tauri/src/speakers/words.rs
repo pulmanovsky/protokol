@@ -541,6 +541,115 @@ pub(crate) fn own_speech(mixed: &[f32], turns: &[Turn]) -> Vec<crate::audio::vad
     out
 }
 
+/// Stretches where a voice spoke for 2 s or more and no word was heard
+/// (Whisper drops a quiet or foreign-sounding voice in a long piece): turns
+/// of one voice closer than half a second joined, cut at most 25 s long
+pub fn silent_turns(pieces: &[PieceWords], turns: &[Turn]) -> Vec<Turn> {
+    const MIN_S: f64 = 2.0;
+    const JOIN_S: f64 = 0.5;
+    const MAX_S: f64 = 25.0;
+    let mut sorted = turns.to_vec();
+    sorted.sort_by(|a, b| a.start.total_cmp(&b.start));
+    let mut joined: Vec<Turn> = Vec::new();
+    for t in sorted {
+        match joined.last_mut() {
+            Some(last) if last.speaker == t.speaker && t.start - last.end < JOIN_S => last.end = last.end.max(t.end),
+            _ => joined.push(t),
+        }
+    }
+    let mut times: Vec<f64> = pieces.iter().flat_map(|p| p.words.iter().map(|w| w.1)).collect();
+    times.sort_by(|a, b| a.total_cmp(b));
+    let heard = |a: f64, b: f64| {
+        let i = times.partition_point(|t| *t < a);
+        times.get(i).is_some_and(|t| *t <= b)
+    };
+    let mut out = Vec::new();
+    for t in joined.into_iter().filter(|t| t.end - t.start >= MIN_S && !heard(t.start, t.end)) {
+        let mut a = t.start;
+        while t.end - a >= MIN_S {
+            let b = (a + MAX_S).min(t.end);
+            out.push(Turn { start: a, end: b, speaker: t.speaker });
+            a = b;
+        }
+    }
+    out
+}
+
+/// Most of a new piece's words are already in the text within 5 s of it
+fn already_nearby(pieces: &[PieceWords], new: &PieceWords) -> bool {
+    const NEAR_S: f64 = 5.0;
+    let near: std::collections::HashSet<String> = pieces
+        .iter()
+        .flat_map(|p| p.words.iter())
+        .filter(|w| w.1 >= new.start - NEAR_S && w.1 <= new.end + NEAR_S)
+        .map(|w| same_form(&w.0))
+        .collect();
+    let found = new.words.iter().filter(|w| near.contains(&same_form(&w.0))).count();
+    found * 2 > new.words.len()
+}
+
+/// Each silent turn (`silent_turns`) transcribed on its own, cut from the
+/// 16 kHz mix; what Whisper makes up on noise is left out. The new pieces
+/// go in among the others by time. Returns how many were added.
+pub async fn fill_silent_turns(
+    engine: &crate::whisper_engine::WhisperEngine,
+    mixed: &[f32],
+    pieces: &mut Vec<PieceWords>,
+    turns: &[Turn],
+    language: Option<String>,
+    stop: &(dyn Fn() -> bool + Send + Sync),
+) -> anyhow::Result<usize> {
+    const RATE: f64 = 16_000.0;
+    const PAD_S: f64 = 0.2;
+    const MIN_SURE: f32 = 0.35;
+    const MIN_WORDS_PER_S: f64 = 0.5;
+    // Bounds the extra time on a meeting where nothing at all was heard
+    const MAX_TURNS: usize = 300;
+    let silent = silent_turns(pieces, turns);
+    if silent.is_empty() {
+        return Ok(0);
+    }
+    log::info!("{} stretch(es) of speech without words: transcribed on their own", silent.len());
+    let mut added = Vec::new();
+    for t in silent.iter().take(MAX_TURNS) {
+        if stop() {
+            break;
+        }
+        let a = (t.start - PAD_S).max(0.0);
+        let b = (t.end + PAD_S).min(mixed.len() as f64 / RATE);
+        let (i, j) = ((a * RATE) as usize, ((b * RATE) as usize).min(mixed.len()));
+        if j <= i + 1600 {
+            continue;
+        }
+        let Some(piece) = transcribe_piece(engine, &mixed[i..j], a, b, language.clone()).await? else { continue };
+        let sure = piece.probs.is_empty() || mean(&piece.probs) >= MIN_SURE;
+        // Speech has a word every second or two; a few words over a long
+        // stretch, or no Ukrainian letters at all, are made up on noise
+        let dense = piece.words.len() as f64 >= (t.end - t.start) * MIN_WORDS_PER_S;
+        let cyrillic = piece.text.chars().any(|c| matches!(c, 'а'..='я' | 'А'..='Я' | 'і' | 'ї' | 'є' | 'ґ' | 'І' | 'Ї' | 'Є' | 'Ґ'));
+        if piece.words.is_empty() || !sure || !dense || !cyrillic || crate::ukrainian::hallucination::hallucination_reason(&piece.text).is_some() {
+            log::debug!("Stretch {:.1}–{:.1}s left out: {} word(s), sure {sure}, Ukrainian letters {cyrillic}", t.start, t.end, piece.words.len());
+            continue;
+        }
+        // The same words as the piece before: Whisper repeating itself
+        let before = pieces.iter().rev().find(|p| p.start <= t.start).map(|p| p.text.as_str());
+        if crate::ukrainian::hallucination::is_repeated_segment(before, &piece.text) {
+            continue;
+        }
+        // Words already written nearby with times a little off: not new speech
+        if already_nearby(pieces, &piece) {
+            log::debug!("Stretch {:.1}–{:.1}s: its words are already nearby", t.start, t.end);
+            continue;
+        }
+        added.push(piece);
+    }
+    let n = added.len();
+    pieces.extend(added);
+    pieces.sort_by(|a, b| a.start.total_cmp(&b.start));
+    log::info!("{n} of {} stretch(es) without words now have text", silent.len());
+    Ok(n)
+}
+
 /// Forget the word times (the transcript was made again another way)
 pub fn remove(folder: &Path) {
     let _ = std::fs::remove_file(folder.join(WORDS_FILE));
@@ -583,7 +692,9 @@ pub fn assign(pieces: &[PieceWords], turns: &[Turn]) -> Vec<(String, f64, f64, u
     for p in pieces {
         for (k, (w, t)) in p.words.iter().enumerate() {
             let Some(s) = speaker_at(&turns, *t) else { continue };
-            words.push((w.clone(), if k == 0 { p.start } else { *t }, s, p.end, k == 0));
+            // A piece opens with silence or another voice the words did not catch
+            let at = if k == 0 { p.start.max(*t - WORD_REACH_S).min(*t) } else { *t };
+            words.push((w.clone(), at, s, p.end, k == 0));
         }
     }
     // Short slips: a run of at most 2 words between runs of one voice
@@ -608,11 +719,17 @@ pub fn assign(pieces: &[PieceWords], turns: &[Turn]) -> Vec<(String, f64, f64, u
     let mut rows: Vec<(String, f64, f64, usize)> = Vec::new();
     for (i, (w, t, s, piece_end, piece_start)) in words.iter().enumerate() {
         let next_start = words.get(i + 1).map(|n| if n.4 { *piece_end } else { n.1 }).unwrap_or(*piece_end);
-        let end = next_start.min(*piece_end).max(*t);
+        // A word lasts until the next one, but not over a long silence or
+        // another voice: no further than its own voice's turn goes on
+        let own_end = turns.iter().find(|x| x.speaker == *s && x.start <= *t && *t <= x.end).map(|x| x.end).unwrap_or(f64::INFINITY);
+        let end = next_start.min(*piece_end).min(*t + WORD_REACH_S).min(own_end).max(*t);
         let new_row = match rows.last() {
             None => true,
             Some(last) => {
-                last.3 != *s || *piece_start && *t - last.2 > 2.0 || (*t - last.1 > MAX_ROW_S && last.0.ends_with(['.', '!', '?']))
+                last.3 != *s
+                    || *piece_start && *t - last.2 > 2.0
+                    || (*t - last.1 > MAX_ROW_S && last.0.ends_with(['.', '!', '?']))
+                    || other_voice_between(&turns, last.2, *t, *s) && !stray_tail(&words, i)
             }
         };
         if new_row {
@@ -624,6 +741,24 @@ pub fn assign(pieces: &[PieceWords], turns: &[Turn]) -> Vec<(String, f64, f64, u
         }
     }
     rows
+}
+
+/// One or two words of a voice after another voice spoke, then a change
+/// again: the end of the earlier row whose times came out late, not a row
+fn stray_tail(words: &[(String, f64, usize, f64, bool)], i: usize) -> bool {
+    let s = words[i].2;
+    let run = words[i..].iter().take_while(|w| w.2 == s).count();
+    run <= 2 && i + run < words.len()
+}
+
+/// How far a word reaches from its time when nothing follows it soon
+const WORD_REACH_S: f64 = 1.5;
+
+/// Another voice spoke for a second or more between `from` and `to`: the
+/// row of `speaker` does not go on over it
+fn other_voice_between(turns: &[Turn], from: f64, to: f64, speaker: usize) -> bool {
+    const MIN_S: f64 = 1.0;
+    turns.iter().any(|x| x.speaker != speaker && x.end.min(to) - x.start.max(from) >= MIN_S)
 }
 
 /// Phrases that close one's own turn («…в мене все», «доповідь закінчив»):
@@ -726,6 +861,48 @@ mod tests {
         let rows = assign(&pieces, &turns);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].3, 0);
+    }
+
+    #[test]
+    fn a_row_does_not_stretch_over_another_voice() {
+        // Speaker 1 talks 3–9 s, but Whisper heard no words of it
+        let pieces = vec![piece(0.0, 12.0, &[("Перше", 0.5), ("питання.", 1.2), ("Друге", 9.5), ("питання.", 10.2)])];
+        let turns = vec![turn(0.0, 2.5, 0), turn(3.0, 9.0, 1), turn(9.2, 12.0, 0)];
+        let rows = assign(&pieces, &turns);
+        assert_eq!(rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), vec!["Перше питання.", "Друге питання."]);
+        assert!(rows[0].2 <= 2.7, "first row ends at {}", rows[0].2);
+        assert_eq!(rows[1].1, 9.5);
+    }
+
+    #[test]
+    fn a_late_last_word_stays_in_its_row() {
+        // «готово.» timed after voice 1 started: still the end of voice 0's row
+        let pieces = vec![piece(0.0, 12.0, &[("Все", 0.5), ("готово.", 4.6), ("Дякую,", 6.0), ("прийнято.", 6.8)])];
+        let turns = vec![turn(0.0, 3.0, 0), turn(3.2, 4.5, 1), turn(4.5, 5.0, 0), turn(5.0, 12.0, 1)];
+        let rows = assign(&pieces, &turns);
+        assert_eq!(rows.iter().map(|r| (r.0.as_str(), r.3)).collect::<Vec<_>>(), vec![("Все готово.", 0), ("Дякую, прийнято.", 1)]);
+    }
+
+    #[test]
+    fn a_piece_does_not_start_long_before_its_first_word() {
+        let pieces = vec![piece(10.0, 20.0, &[("Так.", 16.0), ("Дякую.", 17.0)])];
+        let turns = vec![turn(10.0, 15.0, 1), turn(15.5, 20.0, 0)];
+        let rows = assign(&pieces, &turns);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, 14.5);
+        assert_eq!(rows[0].3, 0);
+    }
+
+    #[test]
+    fn speech_without_words_is_found() {
+        let pieces = vec![piece(0.0, 12.0, &[("Перше", 0.5), ("питання.", 1.2), ("Друге", 9.5)])];
+        // Voice 1 in two parts with a short pause, voice 2 too short, voice 0 has words
+        let turns = vec![turn(0.0, 2.5, 0), turn(3.0, 5.0, 1), turn(5.3, 9.0, 1), turn(9.0, 9.4, 2), turn(9.4, 12.0, 0), turn(40.0, 70.0, 2)];
+        let silent = silent_turns(&pieces, &turns);
+        assert_eq!(silent, vec![turn(3.0, 9.0, 1), turn(40.0, 65.0, 2), turn(65.0, 70.0, 2)]);
+        // Words of the same speech, only timed a little off, are not added twice
+        assert!(already_nearby(&pieces, &piece(9.0, 11.0, &[("друге,", 9.1)])));
+        assert!(!already_nearby(&pieces, &piece(3.0, 9.0, &[("Склад", 3.2), ("готовий", 3.8), ("питання.", 4.0)])));
     }
 
     fn w(text: &str, speaker: usize) -> Vec<(String, f64, usize, f64, bool)> {

@@ -4,7 +4,6 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { MeetingSummary, SummaryProcessResponse, Transcript } from '@/types';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
-import Analytics from '@/lib/analytics';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { toast } from '@/lib/notice';
 import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
@@ -190,7 +189,6 @@ export default function PageContent({
 
   // Track page view
   useEffect(() => {
-    Analytics.trackPageView('meeting_details');
   }, []);
 
   // Protocol review status (Чернетка / Затверджено)

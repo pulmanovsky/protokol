@@ -4,7 +4,6 @@ import './globals.css'
 import Sidebar from '@/components/Sidebar'
 import { SidebarProvider, useSidebar } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
-import AnalyticsProvider from '@/components/AnalyticsProvider'
 import { toast, NoticeHost } from '@/lib/notice'
 import { useState, useEffect, useCallback } from 'react'
 import { usePathname } from 'next/navigation'
@@ -307,7 +306,6 @@ function MainLayout({
       </head>
       <body className="font-sans antialiased">
         <ThemeProvider>
-        <AnalyticsProvider>
           <RecordingStateProvider>
             <TranscriptProvider>
               <ConfigProvider>
@@ -356,7 +354,6 @@ function MainLayout({
               </ConfigProvider>
             </TranscriptProvider>
           </RecordingStateProvider>
-        </AnalyticsProvider>
 
         </ThemeProvider>
       </body>

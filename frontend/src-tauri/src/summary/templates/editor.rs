@@ -41,6 +41,10 @@ pub struct MeetingTypeForm {
     /// «Побажання до тексту»
     #[serde(default)]
     pub wishes: String,
+    /// Words after which the next word is a name (from a template pack; the
+    /// form keeps them as they are)
+    #[serde(default)]
+    pub name_words: Vec<String>,
     /// Built-in types are read-only
     pub built_in: bool,
 }
@@ -66,6 +70,7 @@ pub fn form_of(id: &str) -> Result<MeetingTypeForm, String> {
         style: if spec.classic { STYLE_FIELDS } else { STYLE_POINTS }.to_string(),
         detailed: spec.detailed,
         wishes: spec.wishes.unwrap_or_default(),
+        name_words: spec.name_words,
         built_in: !id.starts_with("custom:"),
     })
 }
@@ -141,6 +146,7 @@ pub fn template_of(form: &MeetingTypeForm) -> Result<Template, String> {
             ordered: true,
             detailed: form.detailed,
             wishes: Some(form.wishes.trim().to_string()).filter(|w| !w.is_empty()),
+            name_words: clean(&form.name_words).into_iter().map(|w| w.to_lowercase()).collect(),
         }),
     })
 }
@@ -231,6 +237,7 @@ mod tests {
             style: STYLE_FIELDS.into(),
             detailed: true,
             wishes: "  Посади писати повністю ".into(),
+            name_words: vec![" Вулиця ".into(), "вулиця".into()],
             built_in: false,
         }
     }
@@ -245,6 +252,7 @@ mod tests {
         assert_eq!(spec.report_fields, vec!["Зроблено", "Ризики"]);
         assert!(spec.classic && spec.ordered && spec.detailed);
         assert_eq!(spec.wishes.as_deref(), Some("Посади писати повністю"));
+        assert_eq!(spec.name_words, vec!["вулиця"]);
         assert_eq!(t.description, "Завдання, кожен доповідач за полями (зроблено, ризики).");
         assert_eq!(spec.parts.len(), 1);
         assert_eq!(spec.parts[0].cues, vec!["почнемо з огляду"]);

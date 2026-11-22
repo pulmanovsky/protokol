@@ -8,7 +8,6 @@ import { DocSectionCopy } from './DocSectionCopy';
 import { EmptyStateSummary } from '@/components/EmptyStateSummary';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { SummaryGeneratorButtonGroup } from './SummaryGeneratorButtonGroup';
-import Analytics from '@/lib/analytics';
 import React, { useEffect, useRef, useState, RefObject } from 'react';
 import { toast } from '@/lib/notice';
 import { ChevronDown, Globe, Loader2, Save } from 'lucide-react';
@@ -300,7 +299,6 @@ export function SummaryPanel({
             type="button"
             className="tb-btn"
             onClick={() => {
-              Analytics.trackButtonClick('save_changes', 'meeting_details');
               void onSaveAll();
             }}
             disabled={isSaving}
@@ -351,7 +349,6 @@ export function SummaryPanel({
               error={summaryError}
               speakerColors={colors}
               onRegenerateSummary={() => {
-                Analytics.trackButtonClick('regenerate_summary', 'meeting_details');
                 onRegenerateSummary();
               }}
               meeting={{

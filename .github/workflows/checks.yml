@@ -1,0 +1,74 @@
+# Automatic checks on every push and pull request: Rust unit tests,
+# TypeScript types. Release builds stay on the Mac
+# (docs/RELEASING.md); these runs use Linux, so macOS-only code is compiled
+# out and its tests run only on the Mac.
+name: checks
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: frontend/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libasound2-dev libpulse-dev cmake clang libssl-dev pkg-config ffmpeg
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+      - name: ONNX Runtime 1.22.0 (from the PyPI wheel, as on the Mac)
+        run: |
+          python3 -m pip download onnxruntime==1.22.0 --no-deps -d "$RUNNER_TEMP/ort" -q
+          python3 -c "import zipfile,glob,sys; zipfile.ZipFile(glob.glob(sys.argv[1]+'/*.whl')[0]).extractall(sys.argv[1]+'/x')" "$RUNNER_TEMP/ort"
+          lib="$RUNNER_TEMP/ort/x/onnxruntime/capi"
+          ln -sf libonnxruntime.so.1.22.0 "$lib/libonnxruntime.so"
+          ln -sf libonnxruntime.so.1.22.0 "$lib/libonnxruntime.so.1"
+          echo "ORT_LIB_LOCATION=$lib" >> "$GITHUB_ENV"
+          echo "ORT_PREFER_DYNAMIC_LINK=1" >> "$GITHUB_ENV"
+          echo "ORT_SKIP_DOWNLOAD=1" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$lib" >> "$GITHUB_ENV"
+      - name: Placeholder sidecars (the real ones are built on the Mac)
+        run: |
+          mkdir -p binaries
+          for b in llama-helper ffmpeg; do
+            printf '#!/bin/sh\n' > "binaries/$b-x86_64-unknown-linux-gnu"
+            chmod +x "binaries/$b-x86_64-unknown-linux-gnu"
+          done
+      - name: Unit tests
+        run: cargo test --lib
+
+  typescript:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Types
+        run: npx tsc --noEmit -p .
+

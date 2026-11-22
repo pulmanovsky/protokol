@@ -261,11 +261,11 @@ mod tests {
     #[test]
     fn sound_key_merges_letters_that_sound_alike() {
         assert_eq!(sound_key("Сьогодні,"), sound_key("сьогодни"));
-        assert_eq!(sound_key("підрозділ"), sound_key("пидроздил"));
+        assert_eq!(sound_key("підприємство"), sound_key("пидприемство"));
         assert_eq!(sound_key("пам’ять"), sound_key("памят"));
         assert_eq!(sound_key("ґанок"), sound_key("ганок"));
         assert_eq!(sound_key("група"), sound_key("группа"));
-        assert_ne!(sound_key("рота"), sound_key("робота"));
+        assert_ne!(sound_key("нота"), sound_key("робота"));
     }
 
     #[test]

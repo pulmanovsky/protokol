@@ -1,8 +1,6 @@
 use log::{debug as log_debug, error as log_error, info as log_info, warn as log_warn};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
-use tauri_plugin_store::StoreExt;
 
 use crate::{
     database::{
@@ -13,18 +11,7 @@ use crate::{
         },
     },
     state::AppState,
-    summary::CustomOpenAIConfig,
 };
-
-// Hardcoded server URL
-const APP_SERVER_URL: &str = "http://localhost:5167";
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ApiResponse<T> {
-    pub success: bool,
-    pub data: Option<T>,
-    pub error: Option<String>,
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Meeting {
@@ -39,37 +26,12 @@ pub struct Meeting {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SearchRequest {
-    pub query: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct TranscriptSearchResult {
     pub id: String,
     pub title: String,
     #[serde(rename = "matchContext")]
     pub match_context: String,
     pub timestamp: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ProfileRequest {
-    pub email: String,
-    pub license_key: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SaveProfileRequest {
-    pub id: String,
-    pub email: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UpdateProfileRequest {
-    pub email: String,
-    pub license_key: String,
-    pub company: String,
-    pub position: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -97,11 +59,6 @@ pub struct SaveModelConfigRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct GetApiKeyRequest {
-    pub provider: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct TranscriptConfig {
     pub provider: String,
     pub model: String,
@@ -115,11 +72,6 @@ pub struct SaveTranscriptConfigRequest {
     pub model: String,
     #[serde(rename = "apiKey")]
     pub api_key: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DeleteMeetingRequest {
-    pub meeting_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -184,24 +136,6 @@ pub struct PaginatedTranscriptsResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SaveMeetingTitleRequest {
-    pub meeting_id: String,
-    pub title: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SaveMeetingSummaryRequest {
-    pub meeting_id: String,
-    pub summary: serde_json::Value,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SaveTranscriptRequest {
-    pub meeting_title: String,
-    pub transcripts: Vec<TranscriptSegment>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct TranscriptSegment {
     pub id: String,
     pub text: String,
@@ -230,117 +164,8 @@ pub struct Profile {
 
 // Helper function to get auth token from store (optional)
 #[allow(dead_code)]
-async fn get_auth_token<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
-    let store = match app.store("store.json") {
-        Ok(store) => store,
-        Err(_) => return None,
-    };
-
-    match store.get("authToken") {
-        Some(token) => {
-            if let Some(token_str) = token.as_str() {
-                let truncated = token_str.chars().take(20).collect::<String>();
-                log_info!("Found auth token: {}", truncated);
-                Some(token_str.to_string())
-            } else {
-                log_warn!("Auth token is not a string");
-                None
-            }
-        }
-        None => {
-            log_warn!("No auth token found in store");
-            None
-        }
-    }
-}
-
 // Helper function to get server address - now hardcoded
-async fn get_server_address<R: Runtime>(_app: &AppHandle<R>) -> Result<String, String> {
-    log_info!("Using hardcoded server URL: {}", APP_SERVER_URL);
-    Ok(APP_SERVER_URL.to_string())
-}
-
 // Generic API call function with optional authentication
-async fn make_api_request<R: Runtime, T: for<'de> Deserialize<'de>>(
-    app: &AppHandle<R>,
-    endpoint: &str,
-    method: &str,
-    body: Option<&str>,
-    additional_headers: Option<HashMap<String, String>>,
-    auth_token: Option<String>, // Pass auth token from frontend
-) -> Result<T, String> {
-    let client = reqwest::Client::new();
-    let server_url = get_server_address(app).await?;
-
-    let url = format!("{}{}", server_url, endpoint);
-    log_info!("Making {} request to: {}", method, url);
-
-    let mut request = match method.to_uppercase().as_str() {
-        "GET" => client.get(&url),
-        "POST" => client.post(&url),
-        "PUT" => client.put(&url),
-        "DELETE" => client.delete(&url),
-        _ => return Err(format!("Unsupported HTTP method: {}", method)),
-    };
-
-    // Add authorization header if auth token is provided
-    if let Some(token) = auth_token {
-        log_info!("Adding authorization header");
-        request = request.header("Authorization", format!("Bearer {}", token));
-    } else {
-        log_warn!("No auth token provided, making unauthenticated request");
-    }
-
-    request = request.header("Content-Type", "application/json");
-
-    // Add additional headers if provided
-    if let Some(headers) = additional_headers {
-        for (key, value) in headers {
-            request = request.header(&key, &value);
-        }
-    }
-
-    // Add body if provided
-    if let Some(body_str) = body {
-        request = request.body(body_str.to_string());
-    }
-
-    let response = request.send().await.map_err(|e| {
-        let error_msg = format!("Request failed: {}", e);
-        log_error!("{}", error_msg);
-        error_msg
-    })?;
-
-    let status = response.status();
-    log_info!("Response status: {}", status);
-
-    if !status.is_success() {
-        let error_text = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        let error_msg = format!("HTTP {}: {}", status, error_text);
-        log_error!("{}", error_msg);
-        return Err(error_msg);
-    }
-
-    let response_text = response.text().await.map_err(|e| {
-        let error_msg = format!("Failed to read response: {}", e);
-        log_error!("{}", error_msg);
-        error_msg
-    })?;
-
-    // Safely truncate response for logging, respecting UTF-8 character boundaries
-    let truncated = response_text.chars().take(200).collect::<String>();
-    log_info!("Response body: {}", truncated);
-
-    serde_json::from_str(&response_text).map_err(|e| {
-        let error_msg = format!("Failed to parse JSON: {}", e);
-        log_error!("{}", error_msg);
-        error_msg
-    })
-}
-
 // API Commands for Tauri
 
 #[tauri::command]
@@ -422,87 +247,6 @@ pub async fn api_search_transcripts<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn api_get_profile<R: Runtime>(
-    app: AppHandle<R>,
-    email: String,
-    license_key: String,
-    auth_token: Option<String>,
-) -> Result<Profile, String> {
-    log_info!(
-        "api_get_profile called for email: {}, auth_token: {}",
-        email,
-        auth_token.is_some()
-    );
-
-    let profile_request = ProfileRequest { email, license_key };
-    let body = serde_json::to_string(&profile_request).map_err(|e| e.to_string())?;
-
-    make_api_request::<R, Profile>(&app, "/get-profile", "POST", Some(&body), None, auth_token)
-        .await
-}
-
-#[tauri::command]
-pub async fn api_save_profile<R: Runtime>(
-    app: AppHandle<R>,
-    id: String,
-    email: String,
-    auth_token: Option<String>,
-) -> Result<serde_json::Value, String> {
-    log_info!(
-        "api_save_profile called for email: {}, auth_token: {}",
-        email,
-        auth_token.is_some()
-    );
-
-    let save_request = SaveProfileRequest { id, email };
-    let body = serde_json::to_string(&save_request).map_err(|e| e.to_string())?;
-
-    make_api_request::<R, serde_json::Value>(
-        &app,
-        "/save-profile",
-        "POST",
-        Some(&body),
-        None,
-        auth_token,
-    )
-    .await
-}
-
-#[tauri::command]
-pub async fn api_update_profile<R: Runtime>(
-    app: AppHandle<R>,
-    email: String,
-    license_key: String,
-    company: String,
-    position: String,
-    auth_token: Option<String>,
-) -> Result<serde_json::Value, String> {
-    log_info!(
-        "api_update_profile called for email: {}, auth_token: {}",
-        email,
-        auth_token.is_some()
-    );
-
-    let update_request = UpdateProfileRequest {
-        email,
-        license_key,
-        company,
-        position,
-    };
-    let body = serde_json::to_string(&update_request).map_err(|e| e.to_string())?;
-
-    make_api_request::<R, serde_json::Value>(
-        &app,
-        "/update-profile",
-        "POST",
-        Some(&body),
-        None,
-        auth_token,
-    )
-    .await
-}
-
-#[tauri::command]
 pub async fn api_get_model_config<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
@@ -518,7 +262,7 @@ pub async fn api_get_model_config<R: Runtime>(
     match SettingsRepository::get_model_config(pool).await {
         Ok(Some(mut config)) => {
             // Providers and built-in models removed in Протокол fall back to the local default model
-            let removed_provider = matches!(config.provider.as_str(), "groq" | "openrouter" | "custom-openai");
+            let removed_provider = matches!(config.provider.as_str(), "openai" | "claude" | "groq" | "openrouter" | "custom-openai");
             let unknown_builtin = config.provider == "builtin-ai"
                 && crate::summary::summary_engine::get_model_by_name(&config.model).is_none();
             if removed_provider || unknown_builtin {
@@ -613,9 +357,8 @@ pub async fn api_save_model_config<R: Runtime>(
         return Err(e.to_string());
     }
 
-    // Skip API key saving for custom-openai provider (it uses customOpenAIConfig JSON instead)
     if let Some(key) = api_key {
-        if !key.is_empty() && provider != "custom-openai" {
+        if !key.is_empty() {
             log_info!("🔑 API key provided, saving...");
             if let Err(e) = SettingsRepository::save_api_key(pool, &provider, &key).await {
                 log_error!("❌ Failed to save API key: {}", e);
@@ -635,32 +378,6 @@ pub async fn api_save_model_config<R: Runtime>(
     Ok(
         serde_json::json!({ "status": "success", "message": "Model configuration saved successfully" }),
     )
-}
-
-#[tauri::command]
-pub async fn api_get_api_key<R: Runtime>(
-    _app: AppHandle<R>,
-    state: tauri::State<'_, AppState>,
-    provider: String,
-    _auth_token: Option<String>,
-) -> Result<String, String> {
-    log_info!(
-        "api_get_api_key called (native) for provider '{}'",
-        &provider
-    );
-    match SettingsRepository::get_api_key(&state.db_manager.pool(), &provider).await {
-        Ok(key) => {
-            log_info!(
-                "Successfully retrieved API key for provider '{}'.",
-                &provider
-            );
-            Ok(key.unwrap_or_default())
-        }
-        Err(e) => {
-            log_error!("Failed to get API key for provider '{}': {}", &provider, e);
-            Err(e.to_string())
-        }
-    }
 }
 
 #[tauri::command]
@@ -1315,75 +1032,7 @@ pub async fn open_meeting_folder<R: Runtime>(
 }
 
 // Simple test command to check backend connectivity
-#[tauri::command]
-pub async fn test_backend_connection<R: Runtime>(
-    app: AppHandle<R>,
-    auth_token: Option<String>,
-) -> Result<String, String> {
-    log_debug!("Testing backend connection...");
 
-    let client = reqwest::Client::new();
-    let server_url = get_server_address(&app).await?;
-
-    log_debug!("Testing connection to: {}", server_url);
-
-    let mut request = client.get(&format!("{}/docs", server_url));
-
-    if let Some(token) = auth_token {
-        request = request.header("Authorization", format!("Bearer {}", token));
-    }
-
-    match request.send().await {
-        Ok(response) => {
-            let status = response.status();
-            log_debug!("Backend responded with status: {}", status);
-            Ok(format!("Backend is reachable. Status: {}", status))
-        }
-        Err(e) => {
-            let error_msg = format!("Failed to connect to backend: {}", e);
-            log_debug!("{}", error_msg);
-            Err(error_msg)
-        }
-    }
-}
-
-#[tauri::command]
-pub async fn debug_backend_connection<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
-    log_debug!("=== DEBUG: Testing backend connection ===");
-
-    // Test 1: Check server address from store
-    let server_url = match get_server_address(&app).await {
-        Ok(url) => {
-            log_debug!("✓ Server URL from store: {}", url);
-            url
-        }
-        Err(e) => {
-            log_error!("✗ Failed to get server URL: {}", e);
-            return Err(format!("Failed to get server URL: {}", e));
-        }
-    };
-
-    // Test 2: Make a simple HTTP request to the backend
-    let client = reqwest::Client::new();
-    let test_url = format!("{}/docs", server_url); // Try the docs endpoint which should be public
-
-    log_debug!("Testing connection to: {}", test_url);
-
-    match client.get(&test_url).send().await {
-        Ok(response) => {
-            let status = response.status();
-            log_debug!("✓ Backend responded with status: {}", status);
-            Ok(format!(
-                "Backend connection successful! Status: {}, URL: {}",
-                status, server_url
-            ))
-        }
-        Err(e) => {
-            log_error!("✗ Backend connection failed: {}", e);
-            Err(format!("Backend connection failed: {}", e))
-        }
-    }
-}
 
 #[tauri::command]
 pub async fn open_external_url<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), String> {
@@ -1407,223 +1056,5 @@ pub async fn open_external_url<R: Runtime>(app: AppHandle<R>, url: String) -> Re
     match result {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("Failed to open URL: {}", e)),
-    }
-}
-
-// ===== CUSTOM OPENAI API COMMANDS =====
-
-/// Saves the custom OpenAI configuration
-/// This configuration is stored as JSON and includes endpoint, apiKey, model, and optional parameters
-#[tauri::command]
-pub async fn api_save_custom_openai_config<R: Runtime>(
-    _app: AppHandle<R>,
-    state: tauri::State<'_, AppState>,
-    endpoint: String,
-    api_key: Option<String>,
-    model: String,
-    max_tokens: Option<i32>,
-    temperature: Option<f32>,
-    top_p: Option<f32>,
-) -> Result<serde_json::Value, String> {
-    log_info!(
-        "api_save_custom_openai_config called: endpoint='{}', model='{}'",
-        &endpoint,
-        &model
-    );
-
-    // Validate required fields
-    if endpoint.trim().is_empty() {
-        return Err("Endpoint URL is required".to_string());
-    }
-    if model.trim().is_empty() {
-        return Err("Model name is required".to_string());
-    }
-
-    // Validate endpoint URL format
-    if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
-        return Err("Endpoint must start with http:// or https://".to_string());
-    }
-
-    // Validate optional numeric parameters
-    if let Some(temp) = temperature {
-        if !(0.0..=2.0).contains(&temp) {
-            return Err("Temperature must be between 0.0 and 2.0".to_string());
-        }
-    }
-    if let Some(top) = top_p {
-        if !(0.0..=1.0).contains(&top) {
-            return Err("Top P must be between 0.0 and 1.0".to_string());
-        }
-    }
-    if let Some(tokens) = max_tokens {
-        if tokens < 1 {
-            return Err("Max tokens must be at least 1".to_string());
-        }
-    }
-
-    let config = CustomOpenAIConfig {
-        endpoint: endpoint.trim().to_string(),
-        api_key: api_key.filter(|k| !k.trim().is_empty()),
-        model: model.trim().to_string(),
-        max_tokens,
-        temperature,
-        top_p,
-    };
-
-    let pool = state.db_manager.pool();
-
-    match SettingsRepository::save_custom_openai_config(pool, &config).await {
-        Ok(()) => {
-            log_info!("✅ Successfully saved custom OpenAI config for endpoint: {}", config.endpoint);
-            Ok(serde_json::json!({
-                "status": "success",
-                "message": "Custom OpenAI configuration saved successfully"
-            }))
-        }
-        Err(e) => {
-            log_error!("❌ Failed to save custom OpenAI config: {}", e);
-            Err(format!("Failed to save custom OpenAI configuration: {}", e))
-        }
-    }
-}
-
-/// Gets the custom OpenAI configuration
-#[tauri::command]
-pub async fn api_get_custom_openai_config<R: Runtime>(
-    _app: AppHandle<R>,
-    state: tauri::State<'_, AppState>,
-) -> Result<Option<CustomOpenAIConfig>, String> {
-    log_info!("api_get_custom_openai_config called");
-
-    let pool = state.db_manager.pool();
-
-    match SettingsRepository::get_custom_openai_config(pool).await {
-        Ok(config) => {
-            if let Some(ref c) = config {
-                log_info!("✅ Found custom OpenAI config: endpoint='{}', model='{}'",
-                    c.endpoint, c.model);
-            } else {
-                log_info!("No custom OpenAI config found");
-            }
-            Ok(config)
-        }
-        Err(e) => {
-            log_error!("❌ Failed to get custom OpenAI config: {}", e);
-            Err(format!("Failed to get custom OpenAI configuration: {}", e))
-        }
-    }
-}
-
-/// Tests the connection to a custom OpenAI-compatible endpoint
-/// Makes a minimal request to verify the endpoint is reachable and responds correctly
-#[tauri::command]
-pub async fn api_test_custom_openai_connection<R: Runtime>(
-    _app: AppHandle<R>,
-    endpoint: String,
-    api_key: Option<String>,
-    model: String,
-) -> Result<serde_json::Value, String> {
-    log_info!(
-        "api_test_custom_openai_connection called: endpoint='{}', model='{}'",
-        &endpoint,
-        &model
-    );
-
-    // Validate endpoint URL format
-    if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
-        return Err("Endpoint must start with http:// or https://".to_string());
-    }
-
-    // Build the URL - append /chat/completions to the base endpoint
-    let url = format!("{}/chat/completions", endpoint.trim_end_matches('/'));
-
-    // Create a minimal test request
-    let test_request = serde_json::json!({
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": "Hi"
-            }
-        ],
-        "max_tokens": 5
-    });
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    let mut request = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&test_request);
-
-    // Add authorization if API key provided
-    if let Some(key) = api_key.filter(|k| !k.trim().is_empty()) {
-        request = request.header("Authorization", format!("Bearer {}", key));
-    }
-
-    match request.send().await {
-        Ok(response) => {
-            let status = response.status();
-            let response_text = response.text().await.unwrap_or_default();
-
-            if status.is_success() {
-                // Parse response as JSON to verify it's a valid OpenAI-compatible response
-                match serde_json::from_str::<serde_json::Value>(&response_text) {
-                    Ok(json) => {
-                        // Verify the response has the expected OpenAI structure
-                        if let Some(choices) = json.get("choices") {
-                            if let Some(choices_array) = choices.as_array() {
-                                if !choices_array.is_empty() {
-                                    // Verify the first choice has the required message structure
-                                    if let Some(first_choice) = choices_array.get(0) {
-                                        // Check if message.content field exists (can be empty string)
-                                        let has_message_structure = first_choice
-                                            .get("message")
-                                            .and_then(|m| {
-                                                m.get("content")
-                                                .or_else(|| m.get("reasoning_content"))
-                                            })
-                                            .is_some();
-
-                                        if has_message_structure {
-                                            log_info!("✅ Custom OpenAI connection test successful - response validated");
-                                            return Ok(serde_json::json!({
-                                                "status": "success",
-                                                "message": "Connection successful and response validated",
-                                                "http_status": status.as_u16()
-                                            }));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Response was 200 but doesn't match OpenAI format
-                        log_warn!("⚠️ Endpoint returned 200 but response doesn't match OpenAI format: {}", response_text);
-                        Err("Endpoint is reachable but doesn't appear to be OpenAI-compatible. Response is missing 'choices' array or 'message.content' / 'message.reasoning_content' field.".to_string())
-                    }
-                    Err(e) => {
-                        log_warn!("⚠️ Endpoint returned 200 but response is not valid JSON: {}", e);
-                        Err(format!("Endpoint is reachable but returned invalid JSON: {}. Response: {}", e, response_text))
-                    }
-                }
-            } else {
-                log_warn!("⚠️ Custom OpenAI connection test failed with status {}: {}", status, response_text);
-                Err(format!("Connection failed with status {}: {}", status, response_text))
-            }
-        }
-        Err(e) => {
-            log_error!("❌ Custom OpenAI connection test failed: {}", e);
-            if e.is_timeout() {
-                Err("Connection timed out. Please check the endpoint URL.".to_string())
-            } else if e.is_connect() {
-                Err("Could not connect to endpoint. Please verify the URL is correct and the server is running.".to_string())
-            } else {
-                Err(format!("Connection failed: {}", e))
-            }
-        }
     }
 }

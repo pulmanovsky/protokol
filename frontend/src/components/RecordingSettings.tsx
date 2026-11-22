@@ -4,7 +4,6 @@ import { FolderOpen } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { DeviceSelection, SelectedDevices } from '@/components/DeviceSelection';
 import { SettingsGroup, SettingsRow, SettingsBlock } from '@/components/settings/SettingsGroup';
-import Analytics from '@/lib/analytics';
 import { toast } from '@/lib/notice';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useConfig } from '@/contexts/ConfigContext';
@@ -66,9 +65,6 @@ export function RecordingSettings({ onSave, part = 'recording' }: RecordingSetti
     await savePreferences(newPreferences, true);
 
     // Track auto-save setting change
-    await Analytics.track('auto_save_recording_toggled', {
-      enabled: enabled.toString()
-    });
   };
 
   const handleDeviceChange = async (devices: SelectedDevices) => {
@@ -86,11 +82,6 @@ export function RecordingSettings({ onSave, part = 'recording' }: RecordingSetti
     await savePreferences(newPreferences);
 
     // Track default device preference changes
-    // Note: Individual device selection analytics are tracked in DeviceSelection component
-    await Analytics.track('default_devices_changed', {
-      has_preferred_microphone: (!!devices.micDevice).toString(),
-      has_preferred_system_audio: (!!devices.systemDevice).toString()
-    });
   };
 
   const handleOpenFolder = async () => {

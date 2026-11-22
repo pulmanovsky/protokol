@@ -44,6 +44,8 @@ interface TemplateForm {
   style: string;
   detailed: boolean;
   wishes: string;
+  /** Words after which the next word is a name (set by a template pack) */
+  nameWords?: string[];
   builtIn: boolean;
 }
 

@@ -102,7 +102,7 @@ pub fn applies_by_itself_now(wrong: &str, right: &str) -> bool {
     applies_now(&saved.unwrap_or(Correction { wrong: wrong.into(), right: right.into(), enabled: true, hint_only: false }))
 }
 
-/// The same words in other grammatical forms («роти» → «роті», «Гончаренка»
+/// The same words in other grammatical forms («школи» → «школі», «Гончаренка»
 /// → «Гончаренко»); a change of case alone («прат» → «ПрАТ») is not one
 pub(crate) fn ending_only(wrong: &str, right: &str) -> bool {
     let w: Vec<String> = wrong.split_whitespace().map(str::to_lowercase).collect();
@@ -538,7 +538,7 @@ mod tests {
         assert!(rule("прат", "ПрАТ").applies_by_itself());
         assert!(rule("вузол два", "Вузол-2").applies_by_itself());
         // Another ending of the same word, a common word: only offered
-        assert!(!rule("роти", "роті").applies_by_itself());
+        assert!(!rule("школи", "школі").applies_by_itself());
         assert!(!rule("Гончаренка", "Гончаренко").applies_by_itself());
         assert!(!rule("репеті", "репетиція").applies_by_itself());
         assert!(!rule("оперативний черговий", "оперативного чергового").applies_by_itself());
@@ -561,7 +561,7 @@ mod tests {
     #[test]
     fn a_change_of_case_is_not_another_ending() {
         assert!(!ending_only("прат", "ПрАТ"));
-        assert!(ending_only("роти", "роті"));
+        assert!(ending_only("школи", "школі"));
         assert!(!ending_only("Кончаренко", "Гончаренко"));
         assert!(!ending_only("робоч а", "робоча"));
     }

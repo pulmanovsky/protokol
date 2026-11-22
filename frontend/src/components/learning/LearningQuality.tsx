@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { plural } from '@/lib/plural';
-import { Quality, QualityMeeting, dayText, num } from '@/lib/learning';
+import { Edits, Quality, QualityMeeting, dayText, num } from '@/lib/learning';
 
 /** Meetings in the chart and in each tile */
 const CHART_MEETINGS = 16;
@@ -147,6 +147,61 @@ function Chart({ meetings, trainings }: { meetings: QualityMeeting[]; trainings:
   );
 }
 
+/** Word corrections by kind, in the order they are shown */
+const WORD_KINDS: { key: keyof Edits; label: string }[] = [
+  { key: 'names', label: 'Імена, назви, скорочення зі словника' },
+  { key: 'numbers', label: 'Числа' },
+  { key: 'endings', label: 'Закінчення' },
+  { key: 'replaced', label: 'Інше слово замість почутого' },
+  { key: 'added', label: 'Пропущені слова, дописані вручну' },
+  { key: 'fillers', label: 'Слова-паразити, прибрані («е-е», «ну»)' },
+  { key: 'removed', label: 'Інші зайві слова, прибрані' },
+];
+
+function total(ms: QualityMeeting[]): Edits {
+  const t: Edits = { numbers: 0, names: 0, endings: 0, replaced: 0, added: 0, fillers: 0, removed: 0, punctuation_lines: 0, speaker_lines: 0 };
+  for (const m of ms) {
+    if (!m.edits) continue;
+    for (const k of Object.keys(t) as (keyof Edits)[]) t[k] += m.edits[k] ?? 0;
+  }
+  return t;
+}
+
+/** What the secretary corrected most, over the last meetings */
+function Kinds({ meetings }: { meetings: QualityMeeting[] }) {
+  const t = total(meetings);
+  const words = WORD_KINDS.reduce((n, k) => n + t[k.key], 0);
+  const rows = WORD_KINDS.map((k) => ({ ...k, n: t[k.key] })).sort((a, b) => b.n - a.n);
+  const top = Math.max(1, ...rows.map((r) => r.n));
+  return (
+    <section className="learn-card" aria-labelledby="quality-kinds-title">
+      <h3 id="quality-kinds-title" className="text-[14px] font-semibold text-gray-900">
+        Що виправляли: {lastText(meetings.length).toLowerCase()}
+      </h3>
+      {words === 0 ? (
+        <p className="settings-help">Слів не виправляли.</p>
+      ) : (
+        <div className="flex flex-col gap-2" style={{ marginTop: 6 }}>
+          {rows.map((r) => (
+            <div key={r.key} className="grid items-center gap-3 text-[13px]" style={{ gridTemplateColumns: 'minmax(0, 15rem) 1fr 4.5rem' }}>
+              <span>{r.label}</span>
+              <div className="h-2 rounded bg-[var(--hairline)]" aria-hidden="true">
+                <div className="learn-bar-base h-2 rounded" style={{ width: `${(100 * r.n) / top}%` }} />
+              </div>
+              <span className="text-right tabular-nums text-[color:var(--muted-text)]">
+                {r.n} · {num((100 * r.n) / words)}%
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="settings-help" style={{ marginTop: 10 }}>
+        Рядків передано іншому мовцю: {t.speaker_lines}. Рядків, де змінено лише розділові знаки чи великі літери: {t.punctuation_lines}.
+      </p>
+    </section>
+  );
+}
+
 /** Settings → Пам'ять → «Якість розпізнавання» */
 export function LearningQuality() {
   const [q, setQ] = useState<Quality | null>(null);
@@ -206,6 +261,7 @@ export function LearningQuality() {
           </>
         )}
       </div>
+      <Kinds meetings={q.meetings.slice(-TILE_MEETINGS)} />
       <Chart meetings={shown} trainings={q.trainings} />
     </div>
   );

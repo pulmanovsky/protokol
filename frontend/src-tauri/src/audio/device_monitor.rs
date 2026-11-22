@@ -116,7 +116,7 @@ impl Drop for DeviceChangeListenerGuard {
         // dereference this pointer after removal returns, so freeing here would be a
         // use-after-free. The leak is bounded — one allocation per recording session,
         // reclaimed at app exit. Same tradeoff as the Core Audio listeners in
-        // system_detector.rs.
+        // the system audio detector Meetily had.
         // unsafe { let _ = Box::from_raw(self.data_ptr); }
         info!("Core Audio device change listener removed (1 listener, callback data intentionally leaked)");
     }

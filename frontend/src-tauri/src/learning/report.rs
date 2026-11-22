@@ -38,6 +38,8 @@ pub struct Facts {
     pub history: Vec<Run>,
     /// Words fixed by learned rules by themselves, and rules turned into hints after an undo
     pub auto_fixes: Option<(usize, usize)>,
+    /// Corrections by kind over the newest checked meetings: (meetings, words, kinds)
+    pub edits: Option<(usize, usize, super::corrected::Edits)>,
 }
 
 /// A number the Ukrainian way: decimal comma
@@ -126,6 +128,28 @@ pub fn lines(f: &Facts) -> Vec<Line> {
         if let Some(u) = (if accepted { r.after.as_ref() } else { r.before.as_ref() }).and_then(underlines) {
             add("underlines", "Підкреслення", u);
         }
+    }
+    if let Some((meetings, words, e)) = f.edits.filter(|(_, words, _)| *words > 0) {
+        let share = |n: usize| 100.0 * n as f64 / words as f64;
+        let w = e.words();
+        let mut parts: Vec<(&str, usize)> = vec![
+            ("назви", e.names),
+            ("числа", e.numbers),
+            ("закінчення", e.endings),
+            ("інше слово", e.replaced),
+            ("дописано", e.added),
+            ("паразити", e.fillers),
+            ("прибрано", e.removed),
+        ];
+        parts.retain(|(_, n)| *n > 0);
+        parts.sort_by(|a, b| b.1.cmp(&a.1));
+        let mut value = format!("{}% слів", num(share(w), 1));
+        if !parts.is_empty() {
+            value.push_str(": ");
+            value.push_str(&parts.iter().map(|(k, n)| format!("{k} {}%", num(share(*n), 1))).collect::<Vec<_>>().join(", "));
+        }
+        value.push_str(&format!("; іншому мовцю {} рядків, лише розділові знаки {}", e.speaker_lines, e.punctuation_lines));
+        add("edits", &format!("Правки за видами, останні {meetings} нарад"), value);
     }
     if let Some((applied, undone)) = f.auto_fixes {
         add("auto_fixes", "Автовиправлення", format!("спрацювало {applied}, скасовано {undone}"));
@@ -248,6 +272,7 @@ mod tests {
             checked_hours: 3.04,
             history: vec![stopped, checked_run()],
             auto_fixes: Some((41, 3)),
+            edits: Some((5, 2000, super::super::corrected::Edits { names: 40, numbers: 20, fillers: 30, endings: 10, speaker_lines: 7, punctuation_lines: 12, ..Default::default() })),
         };
         let l = lines(&f);
         let value = |key: &str| l.iter().find(|x| x.key == key).map(|x| x.value.clone()).unwrap_or_default();
@@ -259,6 +284,7 @@ mod tests {
         assert_eq!(value("training"), "50 хв, пам'ять до 14 ГБ");
         assert_eq!(value("underlines"), "240 на годину, з них помилки 62%, позначають 60% помилок");
         assert_eq!(value("auto_fixes"), "спрацювало 41, скасовано 3");
+        assert_eq!(value("edits"), "5,0% слів: назви 2,0%, паразити 1,5%, числа 1,0%, закінчення 0,5%; іншому мовцю 7 рядків, лише розділові знаки 12");
         // No dates, ids or per-meeting numbers anywhere
         assert!(!l.iter().any(|x| x.value.contains("2026") || x.value.contains("16,0")));
     }

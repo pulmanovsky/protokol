@@ -66,11 +66,25 @@ export interface Status {
   hand_copied: boolean;
 }
 
+/** Corrections of checked lines by kind (corrected.rs) */
+export interface Edits {
+  numbers: number;
+  names: number;
+  endings: number;
+  replaced: number;
+  added: number;
+  fillers: number;
+  removed: number;
+  punctuation_lines: number;
+  speaker_lines: number;
+}
+
 export interface QualityMeeting {
   date: string;
   words: number;
   corrected: number;
   tuned: boolean;
+  edits: Edits;
 }
 
 export interface Quality {

@@ -5,6 +5,9 @@
 //! first edit; a line never edited was right as heard. Only checked lines
 //! count, as in training: read, fixed or marked «перевірено», not left out
 //! of the document. Numbers only leave this module: no texts.
+//!
+//! Each meeting's corrections are also sorted by kind ([`Edits`]): what the
+//! secretary fixes most is where recognition should improve next.
 
 use std::path::Path;
 
@@ -15,6 +18,8 @@ use serde::Serialize;
 pub const MIN_WORDS: usize = 100;
 /// The newest meetings shown
 pub const SHOWN: usize = 40;
+/// The newest meetings whose corrections by kind go into the report
+pub const REPORTED: usize = 10;
 
 /// One checked meeting
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -27,6 +32,110 @@ pub struct Meeting {
     pub corrected: f64,
     /// A fine-tuned model heard it
     pub tuned: bool,
+    /// The corrections by kind
+    pub edits: Edits,
+}
+
+/// Corrections of checked lines by kind: words, and whole lines
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct Edits {
+    /// A number heard wrong, missing or written another way
+    pub numbers: usize,
+    /// A word of the dictionary (names, titles, abbreviations)
+    pub names: usize,
+    /// The right word with another ending
+    pub endings: usize,
+    /// Another word in place of the one heard
+    pub replaced: usize,
+    /// A word recognition missed, added by hand
+    pub added: usize,
+    /// A filler taken out («е-е», «ну», «значить»)
+    pub fillers: usize,
+    /// Another word recognition wrote, taken out
+    pub removed: usize,
+    /// Lines changed only in punctuation or capitals
+    pub punctuation_lines: usize,
+    /// Lines given to another speaker by hand
+    pub speaker_lines: usize,
+}
+
+impl Edits {
+    pub fn add(&mut self, o: &Edits) {
+        self.numbers += o.numbers;
+        self.names += o.names;
+        self.endings += o.endings;
+        self.replaced += o.replaced;
+        self.added += o.added;
+        self.fillers += o.fillers;
+        self.removed += o.removed;
+        self.punctuation_lines += o.punctuation_lines;
+        self.speaker_lines += o.speaker_lines;
+    }
+
+    /// Corrected words (the same count as [`count`])
+    pub fn words(&self) -> usize {
+        self.numbers + self.names + self.endings + self.replaced + self.added + self.fillers + self.removed
+    }
+}
+
+/// Words people say while thinking, which minutes leave out
+const FILLERS: &[&str] = &[
+    "е", "ее", "еее", "е-е", "е-е-е", "ем", "еме", "м", "мм", "ммм", "гм", "хм", "а-а", "ну", "от", "ось", "значить", "типу", "коротше", "так", "вот", "ага", "угу",
+    "загалом", "власне", "скажімо", "якби", "мабуть",
+];
+
+fn is_filler(w: &str) -> bool {
+    FILLERS.contains(&w)
+}
+
+/// The corrections of checked lines by kind: (text now, text as recognised
+/// when the line was edited); `dictionary` as [`super::measure::dictionary_words`] makes it
+pub fn edits(lines: &[(String, Option<String>)], dictionary: &std::collections::HashSet<String>) -> Edits {
+    use super::measure::{kind_of, Kind};
+    use crate::quality::score::{align, norm};
+    let mut e = Edits::default();
+    for (now, heard) in lines {
+        let Some(heard) = heard else { continue };
+        if now == heard {
+            continue;
+        }
+        let r: Vec<String> = now.split_whitespace().map(norm).filter(|w| !w.is_empty()).collect();
+        let h: Vec<String> = heard.split_whitespace().map(norm).filter(|w| !w.is_empty()).collect();
+        if r == h {
+            e.punctuation_lines += 1;
+            continue;
+        }
+        let a = align(&r, &h);
+        for &(i, j) in &a.wrong {
+            match kind_of(&r[i], Some(&h[j]), dictionary) {
+                Kind::Number => e.numbers += 1,
+                Kind::Dictionary => e.names += 1,
+                Kind::Ending => e.endings += 1,
+                Kind::Other => e.replaced += 1,
+            }
+        }
+        for &i in &a.missed {
+            match kind_of(&r[i], None, dictionary) {
+                Kind::Number => e.numbers += 1,
+                Kind::Dictionary => e.names += 1,
+                _ => e.added += 1,
+            }
+        }
+        let paired: std::collections::HashSet<usize> = a.wrong.iter().map(|&(_, j)| j).collect();
+        for (j, w) in h.iter().enumerate() {
+            if a.correct.get(j).copied().unwrap_or(false) || paired.contains(&j) {
+                continue;
+            }
+            if is_filler(w) {
+                e.fillers += 1;
+            } else if kind_of(w, None, dictionary) == Kind::Number {
+                e.numbers += 1;
+            } else {
+                e.removed += 1;
+            }
+        }
+    }
+    e
 }
 
 /// What «Якість розпізнавання» shows
@@ -80,6 +189,7 @@ pub async fn quality(pool: &sqlx::SqlitePool, models: &Path, model_file: &str) -
     let rows: Vec<(String, String)> = sqlx::query_as(&sql)
     .fetch_all(pool)
     .await?;
+    let dictionary = super::measure::dictionary_words(&crate::ukrainian::glossary_terms());
     let changes = super::versions::changes(models);
     let copied_at = super::versions::copied_at(models, model_file);
     let mut meetings = Vec::new();
@@ -89,14 +199,17 @@ pub async fn quality(pool: &sqlx::SqlitePool, models: &Path, model_file: &str) -
         }
         let Some(at) = parse_time(&created_at) else { continue };
         let left_out = crate::speakers::lines::excluded_ids(pool, &id).await?;
-        let lines: Vec<(String, Option<String>, Option<String>)> =
-            sqlx::query_as(&format!("SELECT id, transcript, original_transcript FROM transcripts WHERE meeting_id = ? AND {checked}"))
+        let lines: Vec<(String, Option<String>, Option<String>, i64)> =
+            sqlx::query_as(&format!("SELECT id, transcript, original_transcript, speaker_manual FROM transcripts WHERE meeting_id = ? AND {checked}"))
                 .bind(&id)
                 .fetch_all(pool)
                 .await?;
-        let lines: Vec<(String, Option<String>)> =
-            lines.into_iter().filter(|(l, ..)| !left_out.contains(l)).map(|(_, now, heard)| (now.unwrap_or_default(), heard)).collect();
+        let lines: Vec<(String, Option<String>, Option<String>, i64)> = lines.into_iter().filter(|(l, ..)| !left_out.contains(l)).collect();
+        let speaker_lines = lines.iter().filter(|l| l.3 != 0).count();
+        let lines: Vec<(String, Option<String>)> = lines.into_iter().map(|(_, now, heard, _)| (now.unwrap_or_default(), heard)).collect();
         let (words, changed) = count(&lines);
+        let mut kinds = edits(&lines, &dictionary);
+        kinds.speaker_lines = speaker_lines;
         if words < MIN_WORDS {
             continue;
         }
@@ -105,6 +218,7 @@ pub async fn quality(pool: &sqlx::SqlitePool, models: &Path, model_file: &str) -
             words,
             corrected: 100.0 * changed as f64 / words as f64,
             tuned: super::versions::tuned_by(&changes, copied_at, at),
+            edits: kinds,
         });
     }
     meetings.reverse();
@@ -133,6 +247,27 @@ mod tests {
         ];
         assert_eq!(count(&lines), (9, 2));
         assert_eq!(count(&[]), (0, 0));
+    }
+
+    #[test]
+    fn corrections_are_sorted_by_kind() {
+        let dictionary = super::super::measure::dictionary_words(&["Гончаренко".to_string()]);
+        let lines = vec![
+            // a name, a number and an ending
+            ("Гончаренко доповів про 12 машин".to_string(), Some("Кончаренко доповів про 20 машина".to_string())),
+            // fillers out, a missed word in, another word out
+            ("Склад відкрито сьогодні".to_string(), Some("Ну склад е відкрито вже".to_string())),
+            // capitals and punctuation only
+            ("Питань немає.".to_string(), Some("питань немає".to_string())),
+            // never edited
+            ("Усе за планом".to_string(), None),
+        ];
+        let e = edits(&lines, &dictionary);
+        assert_eq!((e.names, e.numbers, e.endings), (1, 1, 1), "{e:?}");
+        assert_eq!((e.fillers, e.punctuation_lines), (2, 1), "{e:?}");
+        assert_eq!(e.added + e.replaced + e.removed, 1, "«вже» became «сьогодні»: {e:?}");
+        let (_, changed) = count(&lines);
+        assert_eq!(e.words(), changed, "kinds add up to the corrected words");
     }
 
     #[test]

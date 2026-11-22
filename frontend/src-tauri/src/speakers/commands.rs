@@ -413,6 +413,20 @@ pub async fn identify_with_stop(
             }
         }
     }
+    // A voice heard where the import has no words: those stretches transcribed on their own
+    if let Some(words) = kept_words.as_mut() {
+        if !stop() && !crate::audio::recording_commands::recording_now() {
+            match super::words::fill_silent_turns(engine, &mixed, words, &turns, language.clone(), &stop).await {
+                Ok(0) => {}
+                Ok(_) => {
+                    if let Err(e) = super::words::save(&folder, words) {
+                        warn!("Could not save word times: {e}");
+                    }
+                }
+                Err(e) => warn!("Speech without words not transcribed: {e}"),
+            }
+        }
+    }
     let word_rows = kept_words.as_ref().map(|w| super::words::assign(w, &turns).into_iter().map(|(t, a, b, k)| (t, a * 1000.0, b * 1000.0, k)).collect::<Vec<_>>());
     // Once the lines are made again from these word times, they share one timeline
     let one_timeline = kept_words.filter(|w| w.iter().any(|p| !p.heard.is_empty()));
@@ -532,6 +546,12 @@ pub async fn identify_with_stop(
                         (Some(levels), Some(_)) => overlay(&mapped, &me_turns(levels)),
                         _ => mapped,
                     };
+                }
+            }
+            // A voice heard where Whisper wrote nothing: transcribed on its own
+            if !stop() {
+                if let Err(e) = super::words::fill_silent_turns(engine, &mixed, &mut pieces, &turns, language.clone(), &stop).await {
+                    warn!("Speech without words not transcribed: {e}");
                 }
             }
             if let Err(e) = super::words::save(&folder, &pieces) {

@@ -373,10 +373,6 @@ pub(crate) async fn generate_meeting_summary(
     template: &Template,
     token_threshold: usize,
     ollama_endpoint: Option<&str>,
-    custom_openai_endpoint: Option<&str>,
-    max_tokens: Option<u32>,
-    temperature: Option<f32>,
-    top_p: Option<f32>,
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
     summary_language: Option<&str>,
@@ -396,10 +392,6 @@ pub(crate) async fn generate_meeting_summary(
             model_name,
             api_key,
             ollama_endpoint,
-            custom_openai_endpoint,
-            max_tokens,
-            temperature,
-            top_p,
             app_data_dir,
             cancellation_token,
         };
@@ -438,8 +430,7 @@ pub(crate) async fn generate_meeting_summary(
                     for attempt in 1..=MAX_CHUNK_ATTEMPTS {
                         let result = match generate_summary(
                             client, provider, model_name, api_key, "You are an expert meeting summarizer.",
-                            &prompt, ollama_endpoint, custom_openai_endpoint, max_tokens, temperature,
-                            top_p, app_data_dir, cancellation_token,
+                            &prompt, ollama_endpoint, app_data_dir, cancellation_token,
                         )
                         .await
                         {
@@ -503,8 +494,7 @@ pub(crate) async fn generate_meeting_summary(
                     let completion = generate_summary(
                         client, provider, model_name, api_key,
                         "You are an expert at synthesizing meeting summaries.", &prompt,
-                        ollama_endpoint, custom_openai_endpoint, max_tokens, temperature, top_p,
-                        app_data_dir, cancellation_token,
+                        ollama_endpoint, app_data_dir, cancellation_token,
                     )
                     .await?;
                     let cleaned = clean_llm_markdown_detailed(&completion.content);
@@ -531,8 +521,7 @@ pub(crate) async fn generate_meeting_summary(
             }
             let completion = generate_summary(
                 client, provider, model_name, api_key, &final_system_prompt, &final_user_prompt,
-                ollama_endpoint, custom_openai_endpoint, max_tokens, temperature, top_p,
-                app_data_dir, cancellation_token,
+                ollama_endpoint, app_data_dir, cancellation_token,
             )
             .await?;
             let cleaned = clean_llm_markdown_detailed(&completion.content);
@@ -546,8 +535,7 @@ pub(crate) async fn generate_meeting_summary(
             FinalLanguageAction::Translate(language) => {
                 let translated = translate_markdown(
                     client, provider, model_name, api_key, &english_markdown, language,
-                    ollama_endpoint, custom_openai_endpoint, max_tokens, temperature, top_p,
-                    app_data_dir, cancellation_token,
+                    ollama_endpoint, app_data_dir, cancellation_token,
                 )
                 .await
                 .map_err(|error| format!("Translation to {language} failed: {error}"))?;
@@ -559,7 +547,7 @@ pub(crate) async fn generate_meeting_summary(
                     &english_markdown,
                     normalize_markdown_to_english(
                         client, provider, model_name, api_key, &english_markdown, ollama_endpoint,
-                        custom_openai_endpoint, max_tokens, temperature, top_p, app_data_dir,
+                        app_data_dir,
                         cancellation_token,
                     )
                     .await,
@@ -631,10 +619,6 @@ pub(crate) struct LlmCallContext<'a> {
     pub model_name: &'a str,
     pub api_key: &'a str,
     pub ollama_endpoint: Option<&'a str>,
-    pub custom_openai_endpoint: Option<&'a str>,
-    pub max_tokens: Option<u32>,
-    pub temperature: Option<f32>,
-    pub top_p: Option<f32>,
     pub app_data_dir: Option<&'a PathBuf>,
     pub cancellation_token: Option<&'a CancellationToken>,
 }
@@ -652,8 +636,7 @@ impl LlmCallContext<'_> {
         let user_prompt = &super::pack::worded(user_prompt);
         let completion = generate_summary(
             self.client, self.provider, self.model_name, self.api_key, system_prompt, user_prompt,
-            self.ollama_endpoint, self.custom_openai_endpoint, self.max_tokens, self.temperature,
-            self.top_p, self.app_data_dir, self.cancellation_token,
+            self.ollama_endpoint, self.app_data_dir, self.cancellation_token,
         )
         .await?;
         let mut cleaned = clean_llm_markdown_detailed(&completion.content);
@@ -1124,7 +1107,7 @@ async fn speaker_blocks_document(
             info!("Speaker block: {back} said sentence(s) no point carried came back as said");
         }
         // In the order it was said (a point from the middle of a report stays in the middle)
-        let whole = materials::landmark_names(&materials::in_said_order(&points));
+        let whole = materials::names_after(&materials::in_said_order(&points), &spec.name_words);
         numbers.appended += kept.appended;
         numbers.added += kept.added;
         numbers.left += kept.left;
@@ -1183,7 +1166,7 @@ async fn speaker_blocks_document(
             Some((least, most)) => match llm.complete_with_retry(system, &materials::overall_summary_prompt(&source, least, most), "Overall summary").await {
                 Ok(a) => {
                     reasoning_stripped |= a.reasoning_stripped;
-                    let (points, dropped) = materials::keep_backed_points(&materials::landmark_names(&materials::as_points(&a.markdown, most)), &materials::backing_stems(&everything));
+                    let (points, dropped) = materials::keep_backed_points(&materials::names_after(&materials::as_points(&a.markdown, most), &spec.name_words), &materials::backing_stems(&everything));
                     if dropped > 0 {
                         warn!("Overall summary: {dropped} point(s) not backed by the transcript left out");
                     }
@@ -1588,7 +1571,7 @@ async fn generate_materials(
                 Ok(a) => {
                     reasoning_stripped |= a.reasoning_stripped;
                     let everything = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" ");
-                    let (points, dropped) = materials::keep_backed_points(&materials::landmark_names(&materials::as_points(&a.markdown, most)), &materials::backing_stems(&everything));
+                    let (points, dropped) = materials::keep_backed_points(&materials::names_after(&materials::as_points(&a.markdown, most), &spec.name_words), &materials::backing_stems(&everything));
                     if dropped > 0 {
                         warn!("Overall summary: {dropped} point(s) not backed by the transcript left out");
                     }
@@ -1733,10 +1716,6 @@ async fn run_markdown_transform(
     user_prompt: &str,
     failure_label: &str,
     ollama_endpoint: Option<&str>,
-    custom_openai_endpoint: Option<&str>,
-    max_tokens: Option<u32>,
-    temperature: Option<f32>,
-    top_p: Option<f32>,
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
 ) -> Result<CleanedLlmMarkdown, String> {
@@ -1745,7 +1724,7 @@ async fn run_markdown_transform(
     }
     let completion = generate_summary(
         client, provider, model_name, api_key, system_prompt, user_prompt, ollama_endpoint,
-        custom_openai_endpoint, max_tokens, temperature, top_p, app_data_dir, cancellation_token,
+        app_data_dir, cancellation_token,
     )
     .await
     .map_err(|error| format!("{failure_label} failed: {error}"))?;
@@ -1763,10 +1742,6 @@ async fn translate_markdown(
     english_markdown: &str,
     target_language: &str,
     ollama_endpoint: Option<&str>,
-    custom_openai_endpoint: Option<&str>,
-    max_tokens: Option<u32>,
-    temperature: Option<f32>,
-    top_p: Option<f32>,
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
 ) -> Result<CleanedLlmMarkdown, String> {
@@ -1776,7 +1751,7 @@ async fn translate_markdown(
     );
     let cleaned = run_markdown_transform(
         client, provider, model_name, api_key, &system_prompt, &user_prompt, "Translation pass",
-        ollama_endpoint, custom_openai_endpoint, max_tokens, temperature, top_p, app_data_dir,
+        ollama_endpoint, app_data_dir,
         cancellation_token,
     )
     .await?;
@@ -1792,10 +1767,6 @@ async fn normalize_markdown_to_english(
     api_key: &str,
     markdown: &str,
     ollama_endpoint: Option<&str>,
-    custom_openai_endpoint: Option<&str>,
-    max_tokens: Option<u32>,
-    temperature: Option<f32>,
-    top_p: Option<f32>,
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
 ) -> Result<CleanedLlmMarkdown, String> {
@@ -1804,8 +1775,7 @@ async fn normalize_markdown_to_english(
     );
     run_markdown_transform(
         client, provider, model_name, api_key, english_normalization_system_prompt(), &user_prompt,
-        "English normalization pass", ollama_endpoint, custom_openai_endpoint, max_tokens,
-        temperature, top_p, app_data_dir, cancellation_token,
+        "English normalization pass", ollama_endpoint, app_data_dir, cancellation_token,
     )
     .await
 }
@@ -1823,7 +1793,7 @@ mod tests {
         let data = PathBuf::from(std::env::var("PROTOKOL_ITEMS_DATA").unwrap());
         let model = crate::summary::summary_engine::get_default_model();
         let (client, provider) = (Client::new(), LLMProvider::BuiltInAI);
-        let llm = LlmCallContext { client: &client, provider: &provider, model_name: &model.name, api_key: "", ollama_endpoint: None, custom_openai_endpoint: None, max_tokens: None, temperature: None, top_p: None, app_data_dir: Some(&data), cancellation_token: None };
+        let llm = LlmCallContext { client: &client, provider: &provider, model_name: &model.name, api_key: "", ollama_endpoint: None, app_data_dir: Some(&data), cancellation_token: None };
         let mut lines = super::super::materials::parse_transcript(&text);
         let reports = super::super::materials::speaker_reports(&mut lines).unwrap();
         let system = ukrainian_prompts::notes_system_prompt(&[]);
@@ -1848,7 +1818,7 @@ mod tests {
         let (lines, reports) = three_speakers();
         let (client, provider) = (Client::new(), LLMProvider::Ollama);
         // Nothing listens on the discard port: every call fails at once
-        let llm = LlmCallContext { client: &client, provider: &provider, model_name: "none", api_key: "", ollama_endpoint: Some("http://127.0.0.1:9"), custom_openai_endpoint: None, max_tokens: None, temperature: None, top_p: None, app_data_dir: None, cancellation_token: None };
+        let llm = LlmCallContext { client: &client, provider: &provider, model_name: "none", api_key: "", ollama_endpoint: Some("http://127.0.0.1:9"), app_data_dir: None, cancellation_token: None };
         let spec = crate::summary::templates::MeetingSpec::default();
         let error = speaker_blocks_document(&llm, "", &[], 100_000, &lines, &reports, "", &uk_template(), &spec, "system").await.unwrap_err();
         assert!(error.starts_with("Документ не створено: модель документа не запустилася."), "{error}");
@@ -1862,7 +1832,7 @@ mod tests {
     async fn the_document_has_the_templates_blocks_in_its_order() {
         let (lines, reports) = three_speakers();
         let (client, provider) = (Client::new(), LLMProvider::Ollama);
-        let llm = LlmCallContext { client: &client, provider: &provider, model_name: "none", api_key: "", ollama_endpoint: Some("http://127.0.0.1:9"), custom_openai_endpoint: None, max_tokens: None, temperature: None, top_p: None, app_data_dir: None, cancellation_token: None };
+        let llm = LlmCallContext { client: &client, provider: &provider, model_name: "none", api_key: "", ollama_endpoint: Some("http://127.0.0.1:9"), app_data_dir: None, cancellation_token: None };
         // Only the transcript: no model needed
         let spec = crate::summary::templates::MeetingSpec { blocks: vec!["Стенограма".into()], ordered: true, ..Default::default() };
         let out = speaker_blocks_document(&llm, "", &[], 100_000, &lines, &reports, "", &uk_template(), &spec, "system").await.unwrap();
@@ -1959,10 +1929,6 @@ mod tests {
             model_name: &model.name,
             api_key: "",
             ollama_endpoint: None,
-            custom_openai_endpoint: None,
-            max_tokens: None,
-            temperature: None,
-            top_p: None,
             app_data_dir: Some(&data),
             cancellation_token: None,
         };

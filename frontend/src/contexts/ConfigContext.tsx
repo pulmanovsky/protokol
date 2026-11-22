@@ -5,7 +5,6 @@ import { TranscriptModelProps } from '@/components/TranscriptSettings';
 import { SelectedDevices } from '@/components/DeviceSelection';
 import { configService, ModelConfig } from '@/services/configService';
 import { invoke } from '@tauri-apps/api/core';
-import Analytics from '@/lib/analytics';
 import { BetaFeatures, BetaFeatureKey, loadBetaFeatures, saveBetaFeatures } from '@/types/betaFeatures';
 import { applySources, readStoredSources } from '@/lib/audioSources';
 
@@ -215,45 +214,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       try {
         const data = await configService.getModelConfig();
         if (data && data.provider) {
-          // If provider is custom-openai, fetch the additional config
-          if (data.provider === 'custom-openai') {
-            try {
-              const customConfig = await configService.getCustomOpenAIConfig();
-              if (customConfig) {
-                // Merge custom config fields into modelConfig
-                console.log('[ConfigContext] Loading custom OpenAI config:', {
-                  endpoint: customConfig.endpoint,
-                  model: customConfig.model,
-                });
-                const resolvedModel = customConfig.model || data.model || '';
-                setModelConfig(prev => ({
-                  ...prev,
-                  provider: data.provider,
-                  model: resolvedModel || prev.model,
-                  whisperModel: data.whisperModel || prev.whisperModel,
-                  customOpenAIEndpoint: customConfig.endpoint,
-                  customOpenAIModel: customConfig.model,
-                  customOpenAIApiKey: customConfig.apiKey,
-                  maxTokens: customConfig.maxTokens,
-                  temperature: customConfig.temperature,
-                  topP: customConfig.topP,
-                }));
-
-                // Seed per-provider model cache from DB
-                if (resolvedModel) {
-                  const map = JSON.parse(localStorage.getItem('providerModelMap') || '{}');
-                  map[data.provider] = resolvedModel;
-                  localStorage.setItem('providerModelMap', JSON.stringify(map));
-                }
-
-                return; // Early return
-              }
-            } catch (err) {
-              console.error('[ConfigContext] Failed to fetch custom OpenAI config:', err);
-            }
-          }
-
-          // For non-custom-openai providers, just set base config
           setModelConfig(prev => ({
             ...prev,
             provider: data.provider,
@@ -325,7 +285,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   const modelOptions: Record<ModelConfig['provider'], string[]> = {
     ollama: models.map(model => model.name),
     'builtin-ai': [],
-    'custom-openai': [],
   };
 
   // Toggle confidence indicator with localStorage persistence
@@ -360,11 +319,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       const updated = { ...prev, [featureKey]: enabled };
       saveBetaFeatures(updated);
 
-      // Track analytics with specific feature
-      Analytics.track('beta_feature_toggled', {
-        feature: featureKey,
-        enabled: enabled.toString(),
-      }).catch(err => console.error('Failed to track beta feature toggle:', err));
 
       return updated;
     });

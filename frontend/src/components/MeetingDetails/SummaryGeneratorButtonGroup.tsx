@@ -9,7 +9,6 @@ import {
 } from "@/components/ui/dialog"
 import { VisuallyHidden } from "@/components/ui/visually-hidden"
 import { ChevronDown, Cpu, Square } from 'lucide-react';
-import Analytics from '@/lib/analytics';
 import { useState, useEffect, ReactNode } from 'react';
 
 interface SummaryGeneratorButtonGroupProps {
@@ -86,7 +85,6 @@ export function SummaryGeneratorButtonGroup({
           type="button"
           className="tb-btn"
           onClick={() => {
-            Analytics.trackButtonClick('stop_summary_generation', 'meeting_details');
             onStopGeneration();
           }}
           title="Зупинити створення документа"

@@ -495,26 +495,6 @@ pub async fn parakeet_cancel_download(
         .map_err(|error| format!("Failed to cancel Parakeet download: {}", error))
 }
 
-#[command]
-pub async fn parakeet_retry_download<R: Runtime>(
-    app_handle: AppHandle<R>,
-    model_name: String,
-) -> Result<(), String> {
-    log::info!("Retrying download for: {}", model_name);
-
-    let engine = {
-        let guard = PARAKEET_ENGINE.lock().unwrap();
-        guard.as_ref().cloned()
-    };
-
-    if engine.is_some() {
-        // Retry uses the normal download entrypoint, whose owner reservation rejects
-        // a second writer until cancellation cleanup has completed.
-        parakeet_download_model(app_handle, model_name).await
-    } else {
-        Err("Parakeet engine not initialized".to_string())
-    }
-}
 
 #[command]
 pub async fn parakeet_delete_corrupted_model(model_name: String) -> Result<String, String> {

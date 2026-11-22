@@ -8,7 +8,6 @@ import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateCon
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { StatusOverlays } from '@/app/_components/StatusOverlays';
-import Analytics from '@/lib/analytics';
 import { RecordingView } from './_components/RecordingView';
 import { TodayHome } from './_components/TodayHome';
 import { useModalState } from '@/hooks/useModalState';
@@ -63,7 +62,6 @@ export default function Home() {
 
   useEffect(() => {
     // Track page view
-    Analytics.trackPageView('home');
   }, []);
 
   // Startup recovery check

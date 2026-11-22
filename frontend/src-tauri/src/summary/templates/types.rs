@@ -81,6 +81,11 @@ pub struct MeetingSpec {
     /// «Побажання до тексту»: the secretary's own words to the model
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wishes: Option<String>,
+    /// Words after which the next word is a name and gets a capital letter
+    /// («вулиця франка» → «вулиця Франка» with «вулиця» here). Set by a
+    /// template pack; none by default
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub name_words: Vec<String>,
 }
 
 impl MeetingSpec {
@@ -105,7 +110,7 @@ impl MeetingSpec {
 
 impl Default for MeetingSpec {
     fn default() -> Self {
-        Self { report_fields: Vec::new(), parts: Vec::new(), blocks: Self::default_blocks(), title_hints: Vec::new(), hours: Vec::new(), controls: None, group_by_speaker: None, classic: false, ordered: false, detailed: false, wishes: None }
+        Self { report_fields: Vec::new(), parts: Vec::new(), blocks: Self::default_blocks(), title_hints: Vec::new(), hours: Vec::new(), controls: None, group_by_speaker: None, classic: false, ordered: false, detailed: false, wishes: None, name_words: Vec::new() }
     }
 }
 

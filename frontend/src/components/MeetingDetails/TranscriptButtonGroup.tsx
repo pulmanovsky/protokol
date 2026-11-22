@@ -4,7 +4,6 @@ import { useState, useCallback, useEffect } from 'react';
 import { OPEN_SPEAKERS_EVENT } from '@/lib/timeline';
 import { Copy, Download, RefreshCw, Users } from 'lucide-react';
 import { ToolbarMenu } from './ToolbarMenu';
-import Analytics from '@/lib/analytics';
 import { RetranscribeDialog } from './RetranscribeDialog';
 import { SpeakersDialog } from './SpeakersDialog';
 import { useConfig } from '@/contexts/ConfigContext';
@@ -71,7 +70,6 @@ export function TranscriptButtonGroup({
           type="button"
           className="tv-icon"
           onClick={() => {
-            Analytics.trackButtonClick('enhance_transcript', 'meeting_details');
             setShowRetranscribeDialog(true);
           }}
           aria-label="Розпізнати заново"
@@ -85,7 +83,6 @@ export function TranscriptButtonGroup({
         type="button"
         className="tb-btn"
         onClick={() => {
-          Analytics.trackButtonClick('copy_transcript', 'meeting_details');
           onCopyTranscript();
         }}
         disabled={transcriptCount === 0}
@@ -102,7 +99,6 @@ export function TranscriptButtonGroup({
           {
             label: 'Показати запис у Finder',
             run: () => {
-              Analytics.trackButtonClick('open_recording_folder', 'meeting_details');
               void onOpenMeetingFolder();
             },
           },
