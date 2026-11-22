@@ -95,7 +95,7 @@ def make_job(work, base, pieces):
         f.writelines(json.dumps(i, ensure_ascii=False) + "\n" for i in items)
     with open(os.path.join(work, "valid.jsonl"), "w", encoding="utf-8") as f:
         f.writelines(json.dumps(i, ensure_ascii=False) + "\n" for i in items[:2])
-    job = dict(version=1, base_model=base, train=os.path.join(work, "train.jsonl"), valid=os.path.join(work, "valid.jsonl"), prompt="ЗСУ. Гончаренко. Протокол наради.", language="uk", lora_rank=4, learning_rate=1e-2, epochs=2, work_dir=work, ggml_out=os.path.join(work, "ggml-model.bin"))
+    job = dict(version=1, base_model=base, train=os.path.join(work, "train.jsonl"), valid=os.path.join(work, "valid.jsonl"), prompt="ЦНАП. Гончаренко. Протокол наради.", language="uk", lora_rank=4, learning_rate=1e-2, epochs=2, work_dir=work, ggml_out=os.path.join(work, "ggml-model.bin"))
     path = os.path.join(work, "job.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(job, f, ensure_ascii=False)

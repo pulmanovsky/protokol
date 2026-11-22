@@ -278,14 +278,14 @@ mod tests {
 
     #[test]
     fn mistakes_are_sorted_by_kind() {
-        let dictionary = dictionary_words(&["Гончаренко".to_string(), "ЗСУ".to_string(), "Збройні Сили".to_string()]);
+        let dictionary = dictionary_words(&["Гончаренко".to_string(), "ЦНАП".to_string(), "Центр надання послуг".to_string()]);
         assert_eq!(kind_of("3018", Some("3008"), &dictionary), Kind::Number);
         assert_eq!(kind_of("тисячі", None, &dictionary), Kind::Number);
         assert_eq!(kind_of("п'ятнадцять", Some("п'ятдесят"), &dictionary), Kind::Number);
         assert_eq!(kind_of("гончаренко", Some("кончаренко"), &dictionary), Kind::Dictionary);
-        assert_eq!(kind_of("зсу", None, &dictionary), Kind::Dictionary);
+        assert_eq!(kind_of("цнап", None, &dictionary), Kind::Dictionary);
         assert_eq!(kind_of("доповідає", Some("доповідав"), &dictionary), Kind::Ending);
-        assert_eq!(kind_of("роти", Some("роті"), &dictionary), Kind::Ending);
+        assert_eq!(kind_of("школи", Some("школі"), &dictionary), Kind::Ending);
         assert_eq!(kind_of("стоїть", Some("стояв"), &dictionary), Kind::Other, "«сто» only as a whole word");
         assert_eq!(kind_of("сім'я", Some("сімка"), &dictionary), Kind::Other);
         assert_eq!(kind_of("план", Some("клан"), &dictionary), Kind::Other);
