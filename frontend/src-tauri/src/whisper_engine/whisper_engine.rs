@@ -108,9 +108,8 @@ fn log_detected_language(state: &whisper_rs::WhisperState, auto_detect: bool) {
     if !auto_detect {
         return;
     }
-    if let Ok(id) = state.full_lang_id_from_state() {
-        log::info!("Detected language: {}", whisper_rs::get_lang_str(id).unwrap_or("?"));
-    }
+    let id = state.full_lang_id_from_state();
+    log::info!("Detected language: {}", whisper_rs::get_lang_str(id).unwrap_or("?"));
 }
 
 pub struct WhisperEngine {
@@ -399,7 +398,7 @@ impl WhisperEngine {
                     // let _suppressor = crate::whisper_engine::StderrSuppressor::new();
 
                     // Load whisper context with hardware-optimized parameters
-                    WhisperContext::new_with_params(&model_info.path.to_string_lossy(), context_param)
+                    WhisperContext::new_with_params(&model_info.path, context_param)
                         .map_err(|e| anyhow!("Failed to load model {}: {}", model_name, e))?
                     // Suppressor dropped here, stderr restored
                 };
@@ -708,7 +707,7 @@ impl WhisperEngine {
 
         // Additional suppression to reduce C library verbosity
         params.set_suppress_blank(true);
-        params.set_suppress_non_speech_tokens(true);
+        params.set_suppress_nst(true);
         params.set_temperature(adaptive_config.temperature);
         // Experiments only (pipeline test): temperature fallback step
         #[cfg(test)]
@@ -755,19 +754,17 @@ impl WhisperEngine {
         let mut marks: Vec<(usize, f64, f32)> = Vec::new();
         let mut marks_len = 0usize;
 
-        let num_segments = num_segments?;
         if want_words {
             let eot = ctx.token_eot();
             let mut offset = 0usize;
-            for i in 0..num_segments {
-                let n = state.full_n_tokens(i).unwrap_or(0);
-                for j in 0..n {
-                    let Ok(id) = state.full_get_token_id(i, j) else { continue };
-                    if id >= eot {
+            for seg in state.as_iter() {
+                for j in 0..seg.n_tokens() {
+                    let Some(token) = seg.get_token(j) else { continue };
+                    if token.token_id() >= eot {
                         continue;
                     }
-                    let Ok(data) = state.full_get_token_data(i, j) else { continue };
-                    let text = state.full_get_token_text_lossy(i, j).unwrap_or_default();
+                    let data = token.token_data();
+                    let text = token.to_str_lossy().unwrap_or_default();
                     // The token's start (closer to where the word begins than its middle:
                     // on a test meeting 0.26 s vs 0.33 s mean error against speech onsets)
                     marks.push((offset, data.t0 as f64 / 100.0, data.p));
@@ -777,7 +774,8 @@ impl WhisperEngine {
             marks_len = offset;
         }
         for i in 0..num_segments {
-            let segment_text = match state.full_get_segment_text_lossy(i) {
+            let Some(segment) = state.get_segment(i) else { continue };
+            let segment_text = match segment.to_str_lossy() {
                 Ok(text) => text,
                 Err(_) => continue,
             };
@@ -868,7 +866,7 @@ impl WhisperEngine {
 
         // BALANCED settings - good quality with reasonable speed
         params.set_suppress_blank(true);
-        params.set_suppress_non_speech_tokens(true);
+        params.set_suppress_nst(true);
         params.set_temperature(0.3);             // Lower than 0.4 for consistency, higher than 0.0 for quality
         params.set_max_initial_ts(1.0);
         params.set_entropy_thold(2.4);
@@ -940,7 +938,7 @@ impl WhisperEngine {
         log_detected_language(&state, auto_detect);
 
         // Extract text with improved segment handling
-        let num_segments = state.full_n_segments()?;
+        let num_segments = state.full_n_segments();
 
         // Performance optimization: reduce segment completion logging
         // Only log for significant transcriptions to avoid I/O overhead
@@ -950,13 +948,14 @@ impl WhisperEngine {
         let mut result = String::new();
 
         for i in 0..num_segments {
-            let segment_text = match state.full_get_segment_text_lossy(i) {
+            let Some(segment) = state.get_segment(i) else { continue };
+            let segment_text = match segment.to_str_lossy() {
                 Ok(text) => text,
                 Err(_) => continue,
             };
 
-            let _start_time = state.full_get_segment_t0(i).unwrap_or(0);
-            let _end_time = state.full_get_segment_t1(i).unwrap_or(0);
+            let _start_time = segment.start_timestamp();
+            let _end_time = segment.end_timestamp();
 
             // Performance optimization: remove per-segment debug logging
             // This was causing significant I/O overhead during transcription

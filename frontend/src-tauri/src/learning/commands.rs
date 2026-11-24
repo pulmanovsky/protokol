@@ -473,6 +473,7 @@ pub async fn api_learning_report(app: AppHandle, state: tauri::State<'_, crate::
             newest.iter().for_each(|m| e.add(&m.edits));
             (newest.len(), newest.iter().map(|m| m.words).sum(), e)
         }),
+        captions: super::captions_check::check(state.db_manager.pool(), super::corrected::REPORTED).await.ok().flatten(),
     }))
 }
 

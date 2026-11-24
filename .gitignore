@@ -92,3 +92,6 @@ protokol-copies/
 recordings/
 build.log
 *.key
+
+# whisper.cpp sources, fetched by scripts/fetch-whisper-cpp.sh
+/vendor/whisper-rs-sys/whisper.cpp

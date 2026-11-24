@@ -57,6 +57,15 @@ pub struct Edits {
     pub punctuation_lines: usize,
     /// Lines given to another speaker by hand
     pub speaker_lines: usize,
+    /// Of `names`: words of the dictionary written small in the checked text
+    /// (words of longer terms, not names; nothing fixes them by itself)
+    pub names_lower: usize,
+    /// Of `names`: the same change made earlier in the same meeting
+    pub names_repeats: usize,
+    /// Corrected words of any kind whose exact change (heard → right) was
+    /// made earlier in the same meeting: what fixing the rest of a meeting
+    /// at once would save
+    pub repeats: usize,
 }
 
 impl Edits {
@@ -70,6 +79,9 @@ impl Edits {
         self.removed += o.removed;
         self.punctuation_lines += o.punctuation_lines;
         self.speaker_lines += o.speaker_lines;
+        self.names_lower += o.names_lower;
+        self.names_repeats += o.names_repeats;
+        self.repeats += o.repeats;
     }
 
     /// Corrected words (the same count as [`count`])
@@ -89,35 +101,59 @@ fn is_filler(w: &str) -> bool {
 }
 
 /// The corrections of checked lines by kind: (text now, text as recognised
-/// when the line was edited); `dictionary` as [`super::measure::dictionary_words`] makes it
+/// when the line was edited), in the order they were said; `dictionary` as
+/// [`super::measure::dictionary_words`] makes it
 pub fn edits(lines: &[(String, Option<String>)], dictionary: &std::collections::HashSet<String>) -> Edits {
     use super::measure::{kind_of, Kind};
     use crate::quality::score::{align, norm};
     let mut e = Edits::default();
+    // Changes already made in this meeting: (heard, right), "" for a word added or taken out
+    let mut made: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let mut seen = |heard: &str, right: &str| !made.insert((heard.to_string(), right.to_string()));
     for (now, heard) in lines {
         let Some(heard) = heard else { continue };
         if now == heard {
             continue;
         }
-        let r: Vec<String> = now.split_whitespace().map(norm).filter(|w| !w.is_empty()).collect();
+        // Words as written (for capitals) and as compared
+        let written: Vec<(&str, String)> = now.split_whitespace().map(|w| (w, norm(w))).filter(|(_, n)| !n.is_empty()).collect();
+        let r: Vec<String> = written.iter().map(|(_, n)| n.clone()).collect();
         let h: Vec<String> = heard.split_whitespace().map(norm).filter(|w| !w.is_empty()).collect();
         if r == h {
             e.punctuation_lines += 1;
             continue;
         }
+        let small = |i: usize| written[i].0.chars().find(|c| c.is_alphabetic()).is_some_and(|c| c.is_lowercase());
         let a = align(&r, &h);
+        let name = |e: &mut Edits, i: usize, repeat: bool| {
+            e.names += 1;
+            if small(i) {
+                e.names_lower += 1;
+            }
+            if repeat {
+                e.names_repeats += 1;
+            }
+        };
         for &(i, j) in &a.wrong {
+            let repeat = seen(&h[j], &r[i]);
+            if repeat {
+                e.repeats += 1;
+            }
             match kind_of(&r[i], Some(&h[j]), dictionary) {
                 Kind::Number => e.numbers += 1,
-                Kind::Dictionary => e.names += 1,
+                Kind::Dictionary => name(&mut e, i, repeat),
                 Kind::Ending => e.endings += 1,
                 Kind::Other => e.replaced += 1,
             }
         }
         for &i in &a.missed {
+            let repeat = seen("", &r[i]);
+            if repeat {
+                e.repeats += 1;
+            }
             match kind_of(&r[i], None, dictionary) {
                 Kind::Number => e.numbers += 1,
-                Kind::Dictionary => e.names += 1,
+                Kind::Dictionary => name(&mut e, i, repeat),
                 _ => e.added += 1,
             }
         }
@@ -125,6 +161,9 @@ pub fn edits(lines: &[(String, Option<String>)], dictionary: &std::collections::
         for (j, w) in h.iter().enumerate() {
             if a.correct.get(j).copied().unwrap_or(false) || paired.contains(&j) {
                 continue;
+            }
+            if seen(w, "") {
+                e.repeats += 1;
             }
             if is_filler(w) {
                 e.fillers += 1;
@@ -200,7 +239,7 @@ pub async fn quality(pool: &sqlx::SqlitePool, models: &Path, model_file: &str) -
         let Some(at) = parse_time(&created_at) else { continue };
         let left_out = crate::speakers::lines::excluded_ids(pool, &id).await?;
         let lines: Vec<(String, Option<String>, Option<String>, i64)> =
-            sqlx::query_as(&format!("SELECT id, transcript, original_transcript, speaker_manual FROM transcripts WHERE meeting_id = ? AND {checked}"))
+            sqlx::query_as(&format!("SELECT id, transcript, original_transcript, speaker_manual FROM transcripts WHERE meeting_id = ? AND {checked} ORDER BY audio_start_time"))
                 .bind(&id)
                 .fetch_all(pool)
                 .await?;
@@ -268,6 +307,30 @@ mod tests {
         assert_eq!(e.added + e.replaced + e.removed, 1, "«вже» became «сьогодні»: {e:?}");
         let (_, changed) = count(&lines);
         assert_eq!(e.words(), changed, "kinds add up to the corrected words");
+    }
+
+    #[test]
+    fn names_written_small_and_changes_made_again_are_counted() {
+        let dictionary = super::super::measure::dictionary_words(&["Гончаренко".to_string(), "відділ кадрів".to_string()]);
+        let lines = vec![
+            ("Гончаренко прибув".to_string(), Some("Кончаренко прибув".to_string())),
+            // the same change again, and a word of a longer term (written small)
+            ("Доповідає Гончаренко з відділу кадрів".to_string(), Some("Доповідає Кончаренко з відділу кадр".to_string())),
+            // the same name heard another way: not a repeat
+            ("Гончаренко погодив".to_string(), Some("Гончарено погодив".to_string())),
+            // an extra word taken out twice
+            ("Склад відкрито".to_string(), Some("Склад вже відкрито".to_string())),
+            ("Машини готові".to_string(), Some("Машини вже готові".to_string())),
+        ];
+        let e = edits(&lines, &dictionary);
+        assert_eq!(e.names, 4, "{e:?}");
+        assert_eq!(e.names_lower, 1, "«кадрів» is a word of a longer term: {e:?}");
+        assert_eq!(e.names_repeats, 1, "{e:?}");
+        assert_eq!(e.repeats, 2, "the second «Кончаренко» and the second «вже»: {e:?}");
+        let mut sum = Edits::default();
+        sum.add(&e);
+        sum.add(&e);
+        assert_eq!((sum.names_lower, sum.names_repeats, sum.repeats), (2, 2, 4));
     }
 
     #[test]

@@ -155,7 +155,7 @@ SOFTWARE.
 ### Vexa
 
 - Use: the script that runs inside a Google Meet page opened in the app's own
-  window (`frontend/src-tauri/src/meet/probe.js`) finds each participant's
+  window (`frontend/src-tauri/src/meet/capture.js`) finds each participant's
   audio stream and the participant tile lit as speaking. Parts of it are
   adapted from Vexa's `core/meetings/modules/gmeet-capture`
   (`gmeet-capture.ts`, `gmeet-speakers.ts`, `pcm-capture.ts`).
@@ -180,6 +180,43 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
+### TranscripTonic
+
+- Use: the same script reads Google Meet's own captions off the page (the
+  captions region, each speaker's name and the text after it). How it finds
+  them is adapted from TranscripTonic's Google Meet content script
+  (`extension/content-scripts/google-meet`).
+- Copyright (c) 2024 Vivek G
+- Source: https://github.com/vivek-nexus/transcriptonic
+- Licence: MIT.
+- Modifications: an id per caption text with the first and last time it was
+  seen, handed to the app on the same Mac with the other reports; captions
+  turned on in Ukrainian and kept out of sight.
+
+```
+MIT License
+
+Copyright (c) 2024 Vivek G
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## FFmpeg
 
 The macOS app carries an `ffmpeg` program (Contents/MacOS/ffmpeg) that
@@ -199,7 +236,8 @@ inside the app).
 
 ## Libraries
 
-The app is built with whisper.cpp and llama.cpp (MIT), ONNX Runtime (MIT),
+The app is built with whisper.cpp 1.9.5 (MIT, through whisper-rs and a
+copy of whisper-rs-sys in `vendor/whisper-rs-sys`, Unlicense) and llama.cpp (MIT), ONNX Runtime (MIT),
 Tauri (MIT or Apache-2.0), Next.js and React (MIT) and the other Rust and
 JavaScript packages listed in `Cargo.lock` and `frontend/pnpm-lock.yaml`,
 each under its own licence.

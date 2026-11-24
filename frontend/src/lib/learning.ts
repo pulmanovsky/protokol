@@ -77,6 +77,12 @@ export interface Edits {
   removed: number;
   punctuation_lines: number;
   speaker_lines: number;
+  /** Of names: dictionary words written small (words of longer terms) */
+  names_lower: number;
+  /** Of names: the same change made earlier in the same meeting */
+  names_repeats: number;
+  /** Any change made earlier in the same meeting */
+  repeats: number;
 }
 
 export interface QualityMeeting {

@@ -18,10 +18,12 @@
 //!
 //! [`commands`] holds what Settings sees and does, and the loop that starts
 //! a run at night; [`report`] the numbers a user may choose to send;
-//! [`corrected`] how many words of each checked meeting were corrected.
+//! [`corrected`] how many words of each checked meeting were corrected;
+//! [`captions_check`] how Meet's captions would have pointed to them.
 //!
 //! Recordings, texts and models never leave the Mac.
 
+pub mod captions_check;
 pub mod commands;
 pub mod corrected;
 pub mod dataset;

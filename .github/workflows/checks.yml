@@ -49,6 +49,9 @@ jobs:
             printf '#!/bin/sh\n' > "binaries/$b-x86_64-unknown-linux-gnu"
             chmod +x "binaries/$b-x86_64-unknown-linux-gnu"
           done
+      - name: whisper.cpp sources (pinned release)
+        working-directory: .
+        run: scripts/fetch-whisper-cpp.sh
       - name: Unit tests
         run: cargo test --lib
 

@@ -28,6 +28,7 @@
 //! The window shows only Google's own sites; links Meet opens in a new window
 //! go to the default browser.
 
+pub mod captions;
 pub mod frames;
 pub mod live;
 
@@ -74,6 +75,37 @@ const POP_FOR: Duration = Duration::from_secs(12);
 /// after that is the old page, not a return to it
 static CHOSEN_AT: AtomicU64 = AtomicU64::new(0);
 const CAPTURE_JS: &str = include_str!("capture.js");
+
+/// Test runs only: presses Meet's «Admit» / «Admit all» (and its confirmation)
+#[cfg(feature = "test-hooks")]
+const TEST_ADMIT_JS: &str = r#"if (location.hostname === 'meet.google.com' && window.top === window) setInterval(() => {
+  for (const b of document.querySelectorAll('button, [role="button"]')) {
+    const t = (b.innerText || '').replace(/\s+/g, ' ').trim();
+    if (/^(admit|admit all|впустити|впустити всіх|прийняти|прийняти всіх)$/i.test(t) && b.getClientRects().length) b.click();
+  }
+}, 2000);
+"#;
+
+/// The script for the Meet page. Test runs only (`test-hooks`, never the
+/// release dmg): PROTOKOL_TEST_CAPTIONS_LANG=<name>:<code> (English:en) makes
+/// it set another captions language, and it notes in its reports what Meet
+/// shows around its captions, to follow how they were turned on.
+fn page_script() -> String {
+    #[cfg(feature = "test-hooks")]
+    {
+        let mut pre = String::from("window.__protokolCaptionsDump = true;\n");
+        if let Some((name, code)) = std::env::var("PROTOKOL_TEST_CAPTIONS_LANG").ok().as_deref().and_then(|v| v.split_once(':')) {
+            pre.push_str(&format!("window.__protokolCaptionsLang = {};\n", serde_json::json!({ "name": name, "code": code })));
+        }
+        // PROTOKOL_TEST_ADMIT=1: guests asking to join a test call are let in
+        if std::env::var("PROTOKOL_TEST_ADMIT").as_deref() == Ok("1") {
+            pre.push_str(TEST_ADMIT_JS);
+        }
+        return format!("{pre}{CAPTURE_JS}");
+    }
+    #[allow(unreachable_code)]
+    CAPTURE_JS.to_string()
+}
 /// Safari's own user agent: Meet supports Safari and may refuse an unknown WebKit browser
 const SAFARI_UA: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15";
@@ -283,7 +315,7 @@ fn build_window<R: Runtime>(app: &AppHandle<R>, url: Url) -> tauri::Result<()> {
     let handle = app.clone();
     let page = WebviewBuilder::new(PAGE_LABEL, WebviewUrl::External(url))
         .user_agent(SAFARI_UA)
-        .initialization_script(CAPTURE_JS)
+        .initialization_script(page_script())
         .data_store_identifier(STORE_ID)
         // Asked for every frame too, not only the page: anything else is cancelled
         // and opened in the default browser at most once per host per 30 s, so a
@@ -612,6 +644,7 @@ async fn push<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, report: serde_
         check_sign_in(&webview);
     }
     window_state(&webview, &report);
+    captions_state(&report);
     if report.get("landing").and_then(|v| v.as_bool()) == Some(true) {
         on_landing(&app);
     }
@@ -645,6 +678,38 @@ fn window_state<R: Runtime>(webview: &Webview<R>, report: &serde_json::Value) {
     let was_hidden = before.as_ref().map_or(false, |b| b.1 == "hidden" || b.2);
     if in_call && (page == "hidden" || minimised) && !was_hidden {
         warn!("MEET-HIDDEN the Meet page is {} during a call{}", if minimised { "in a minimised window" } else { "hidden" }, if recording { " while recording" } else { "" });
+    }
+}
+
+/// What the script last did with Meet's captions, and their language
+static CAPTIONS_STATE: Mutex<Option<(String, String)>> = Mutex::new(None);
+
+/// A line in the journal whenever the captions' state in the call changes:
+/// turned on and out of sight, left to the person, or not turned on (the
+/// call then has no second text to check against: MEET-NO-CAPTIONS)
+fn captions_state(report: &serde_json::Value) {
+    let field = |key: &str, keep: fn(char) -> bool, max: usize| -> String {
+        report.get(key).and_then(|v| v.as_str()).unwrap_or("").chars().filter(|c| keep(*c)).take(max).collect()
+    };
+    let auto = field("ccAuto", |c| c.is_ascii_lowercase() || c == ' ' || c == ',', 24);
+    if auto.is_empty() || auto == "not in call" {
+        return;
+    }
+    let lang = field("ccLang", |c| c.is_alphabetic() || matches!(c, ' ' | '(' | ')'), 40);
+    let now = (auto, lang);
+    {
+        let mut g = CAPTIONS_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        if g.as_ref() == Some(&now) {
+            return;
+        }
+        g.replace(now.clone());
+    }
+    let (auto, lang) = now;
+    let lang = if lang.is_empty() { "not shown".to_string() } else { lang };
+    if auto == "not turned on" {
+        warn!("MEET-NO-CAPTIONS Meet's captions are not on in the call ({auto})");
+    } else {
+        info!("MEET-CAPTIONS {auto}, language: {lang}");
     }
 }
 

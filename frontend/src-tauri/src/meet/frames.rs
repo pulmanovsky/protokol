@@ -43,6 +43,9 @@ pub struct MeetCall {
     pub level: Vec<u32>,
     /// Participants lit as speaking in each frame (indices into `names`)
     pub lit: Vec<Vec<usize>>,
+    /// Meet's own captions, when they were on (the last version of each)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub captions: Vec<super::captions::Caption>,
 }
 
 impl MeetCall {
@@ -62,6 +65,8 @@ impl MeetCall {
 
     /// Adds one report's frames; false when it has none to add
     fn add_report(&mut self, r: &Value) -> bool {
+        // Captions are text, not who is lit: kept from a hidden page too
+        super::captions::add_report(&mut self.captions, r);
         // While the page is hidden Meet can stop updating the tiles and keep
         // the last speaker's lit: such frames say nothing of who speaks
         if frozen(r) {
@@ -113,6 +118,8 @@ impl MeetCall {
         let mut order: Vec<usize> = (0..self.t.len()).filter(|&i| self.t[i] >= from && self.t[i] <= to).collect();
         order.sort_by(|&a, &b| self.t[a].total_cmp(&self.t[b]));
         let mut out = MeetCall { v: 1, ..Default::default() };
+        out.captions = std::mem::take(&mut self.captions).into_iter().filter(|c| c.t1 >= from && c.t0 <= to).collect();
+        out.captions.sort_by(|a, b| a.t0.total_cmp(&b.t0));
         let names = std::mem::take(&mut self.names);
         for i in order {
             out.t.push(self.t[i]);

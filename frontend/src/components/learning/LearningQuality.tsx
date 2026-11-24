@@ -159,7 +159,7 @@ const WORD_KINDS: { key: keyof Edits; label: string }[] = [
 ];
 
 function total(ms: QualityMeeting[]): Edits {
-  const t: Edits = { numbers: 0, names: 0, endings: 0, replaced: 0, added: 0, fillers: 0, removed: 0, punctuation_lines: 0, speaker_lines: 0 };
+  const t: Edits = { numbers: 0, names: 0, endings: 0, replaced: 0, added: 0, fillers: 0, removed: 0, punctuation_lines: 0, speaker_lines: 0, names_lower: 0, names_repeats: 0, repeats: 0 };
   for (const m of ms) {
     if (!m.edits) continue;
     for (const k of Object.keys(t) as (keyof Edits)[]) t[k] += m.edits[k] ?? 0;
@@ -183,14 +183,13 @@ function Kinds({ meetings }: { meetings: QualityMeeting[] }) {
       ) : (
         <div className="flex flex-col gap-2" style={{ marginTop: 6 }}>
           {rows.map((r) => (
-            <div key={r.key} className="grid items-center gap-3 text-[13px]" style={{ gridTemplateColumns: 'minmax(0, 15rem) 1fr 4.5rem' }}>
+            <div key={r.key} className="grid items-center gap-x-3 text-[13px]" style={{ gridTemplateColumns: 'minmax(0, 17rem) minmax(4rem, 1fr) 2.5rem 3.5rem' }}>
               <span>{r.label}</span>
               <div className="h-2 rounded bg-[var(--hairline)]" aria-hidden="true">
                 <div className="learn-bar-base h-2 rounded" style={{ width: `${(100 * r.n) / top}%` }} />
               </div>
-              <span className="text-right tabular-nums text-[color:var(--muted-text)]">
-                {r.n} · {num((100 * r.n) / words)}%
-              </span>
+              <span className="text-right tabular-nums whitespace-nowrap text-[color:var(--muted-text)]">{r.n}</span>
+              <span className="text-right tabular-nums whitespace-nowrap text-[color:var(--muted-text)]">{num((100 * r.n) / words)}%</span>
             </div>
           ))}
         </div>

@@ -1,18 +1,21 @@
 // Protokol: who speaks in a Google Meet call.
 //
-// Runs inside the Meet page opened in Protokol's own window. It only LOOKS:
+// Runs inside the Meet page opened in Protokol's own window. It LOOKS at
 // which audio streams the page plays, how loud each one is every 100 ms,
-// which participant tiles are lit as speaking, the tile names and whether
-// Meet's own microphone button is on. Every 2 s it hands a report to Protokol
+// which participant tiles are lit as speaking, the tile names, whether
+// Meet's own microphone button is on and the text of Meet's captions. Every
+// 2 s it hands a report to Protokol
 // on this Mac (plugin:meetprobe|push), and the microphone state also at once
 // when it changes (plugin:meetprobe|mic), so the recording takes the
 // secretary's microphone only while it is on in Meet. Nothing is sent
-// anywhere else, and nothing on the page is changed: what Protokol sees is
-// shown in its own toolbar above the page. The one thing Protokol asks of the
-// page is to press Meet's microphone button when the secretary presses
-// Protokol's (window.__protokolSetMic). And so that Meet keeps lighting the
-// tiles while its window is minimised, the page is always told it is visible
-// and its animation frames keep coming (see «Minimised window» below).
+// anywhere else: what Protokol sees is shown in its own toolbar above the
+// page. On the page itself it only presses Meet's own buttons: the
+// microphone when the secretary presses Protokol's (window.__protokolSetMic),
+// the camera off when joining, and the captions on, in Ukrainian, kept out of
+// sight (see «Captions on, out of sight» below). And so that Meet keeps
+// lighting the tiles while its window is minimised, the page is always told
+// it is visible and its animation frames keep coming (see «Minimised window»
+// below).
 //
 // Parts adapted from Vexa (https://github.com/Vexa-ai/vexa,
 // core/meetings/modules/gmeet-capture: gmeet-capture.ts, gmeet-speakers.ts,
@@ -27,7 +30,7 @@
   if (window.top !== window) return;
   window.__protokolMeetProbe = true;
 
-  const VERSION = 9;
+  const VERSION = 11;
   const LEVEL_MS = 100;
   const TILE_MS = 200;
   const REPORT_MS = 2000;
@@ -497,6 +500,401 @@
     note(`mic observer: ${e && e.message}`);
   }
 
+  // ── Meet's own captions ──────────────────────────────────────────────────
+  // When captions are on in Meet (its CC button, or the «c» key), Meet shows
+  // what each person says, by name. They are Google's recognition, made
+  // anyway for anyone in the call who turns captions on; Protokol reads
+  // them off the page, as a second text to check its own against, and sends
+  // them nowhere but to Protokol. It turns them on itself (below).
+  //
+  // The captions sit in a region (role="region", tabindex="0"); each block
+  // holds the speaker's name and, right after it, the text, which Meet keeps
+  // rewriting while the person speaks and corrects a little afterwards. Each
+  // text element gets an id; every version of its text is kept with the time
+  // it was first and last seen, so Protokol can use the last one. A text that
+  // suddenly gets much shorter (Meet starts over after a long speech) gets a
+  // new id. Adapted from TranscripTonic (https://github.com/vivek-nexus/transcriptonic,
+  // extension/content-scripts/google-meet), MIT License, Copyright (c) 2024 Vivek G (THIRD_PARTY_NOTICES.md).
+  const CC_ICONS = ['closed_caption', 'closed_caption_off', 'translate_cc', 'subtitles', 'subtitles_off'];
+  const CAPTION_MS = 300;
+  const CAPTION_MAX_TEXT = 4000;
+  const CAPTION_MAX_PER_REPORT = 300;
+  const captionIds = new WeakMap(); // text element -> { id, text, first }
+  let captionNext = 0;
+  let captionRegion = null;
+  let captionObserver = null;
+  const captionDirty = new Set(); // text elements changed since the last pass
+  let captionOut = []; // { id, who, text, t0, t1 } since the last report
+
+  function captionsButton() {
+    for (const icon of document.querySelectorAll('.google-symbols, .google-material-icons, i')) {
+      if (!CC_ICONS.includes((icon.textContent || '').trim())) continue;
+      const b = icon.closest('button');
+      if (b && !b.closest('[data-participant-id]')) return b;
+    }
+    return null;
+  }
+
+  /** Meet's captions button: true on, false off, null not on the page (or
+   *  neither its state nor its icon tells) */
+  function captionsOn() {
+    const b = captionsButton();
+    if (!b) return null;
+    const v = b.getAttribute('aria-pressed');
+    if (v === 'true') return true;
+    if (v === 'false') return false;
+    // Without a pressed state, the icon: «closed_caption_off» while they are off
+    for (const icon of b.querySelectorAll('.google-symbols, .google-material-icons, i')) {
+      const name = (icon.textContent || '').trim();
+      if (name === 'closed_caption_off' || name === 'subtitles_off') return false;
+      if (name === 'closed_caption' || name === 'subtitles') return true;
+    }
+    return null;
+  }
+
+  function captionText(node) {
+    const el = node && (node.nodeType === Node.TEXT_NODE ? node.parentElement : node);
+    if (!el || !captionRegion || !captionRegion.contains(el) || el === captionRegion) return;
+    captionDirty.add(el);
+  }
+
+  function captionPass() {
+    if (!captionDirty.size) return;
+    const now = Date.now();
+    for (const el of captionDirty) {
+      if (!el.isConnected) continue;
+      // The name is the element right before the text, inside the same block
+      const nameEl = el.previousElementSibling;
+      const who = (nameEl && nameEl.textContent || '').trim();
+      const text = (el.textContent || '').trim();
+      if (!who || who.length > 60 || !text || text === who) continue;
+      let c = captionIds.get(el);
+      if (c && text.length < c.text.length - 250) c = null;
+      if (!c) {
+        c = { id: captionNext++, text: '', first: now };
+        captionIds.set(el, c);
+      }
+      if (c.text === text) continue;
+      c.text = text;
+      if (captionOut.length < CAPTION_MAX_PER_REPORT) {
+        captionOut.push({ id: c.id, who: who.slice(0, 60), text: text.slice(0, CAPTION_MAX_TEXT), t0: c.first, t1: now });
+      }
+    }
+    captionDirty.clear();
+  }
+
+  function captionWatch() {
+    const region = document.querySelector('div[role="region"][tabindex="0"]');
+    if (region === captionRegion) return;
+    if (captionObserver) captionObserver.disconnect();
+    captionRegion = region;
+    captionObserver = null;
+    if (!region) return;
+    try {
+      captionObserver = new MutationObserver((records) => {
+        for (const r of records) {
+          if (r.type === 'characterData') captionText(r.target);
+          else for (const n of r.addedNodes) {
+            if (n.nodeType === Node.TEXT_NODE) captionText(n);
+            else if (n.nodeType === Node.ELEMENT_NODE) {
+              const w = document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
+              for (let t = w.nextNode(); t; t = w.nextNode()) captionText(t);
+            }
+          }
+        }
+      });
+      captionObserver.observe(region, { subtree: true, childList: true, characterData: true });
+    } catch (e) {
+      note(`captions: ${e && e.message}`);
+    }
+  }
+
+  // ── Captions on, out of sight ────────────────────────────────────────────
+  // So that every call in this window has the second text, Protokol turns
+  // Meet's captions on by itself once in the call, sets their language to
+  // Ukrainian and moves them out of sight: the call looks as before. Captions
+  // in Meet are only on this screen; no one else in the call is told. If the
+  // person reaches for captions themselves (Meet's captions button or the «c»
+  // key), they are shown at once and left to the person for the rest of the
+  // meeting: Protokol neither hides them nor turns them back on.
+  const CC_TICK_MS = 1000;
+  const CC_WAIT_MS = 2500;
+  const CC_TRIES = 6;
+  const CC_LANG_TRIES = 4;
+  const CC_TURN_ON = /turn on captions|увімкнути субтитри|включить субтитры/i;
+  const CC_SWITCH = /^(captions|субтитри|субтитры)$/i;
+  const CC_LANG_NAME = /english|ukrainian|russian|polish|german|french|spanish|italian|portuguese|англійськ|українськ|російськ|польськ|німецьк|французьк|іспанськ|английск|украинск|русск/i;
+  const CC_NOT_LANG = /translat|переклад|перевод/i;
+  const CC_CHOICES = '[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="switch"], [role="radio"], [role="combobox"], button, [role="button"]';
+  const CC_LIST = '[role="listbox"], [role="menu"], [role="radiogroup"]';
+  const CC_OUT = 'data-protokol-out-of-sight';
+  const ICONS = '.google-symbols, .google-material-icons, .material-icons-extended, .material-symbols-outlined, i';
+  let ccState = 'not in call';
+  let ccTries = 0;
+  let ccPressedAt = 0;
+  let ccLangTries = 0;
+  let ccLangAt = 0;
+  let ccLang = null;
+  let ccPage = '';
+  let ccChoiceHere = null;
+  let ccSwallowUntil = 0;
+
+  /** The language Protokol sets: Ukrainian; another one in test runs only */
+  function ccTarget() {
+    const t = window.__protokolCaptionsLang;
+    if (t && typeof t.name === 'string' && typeof t.code === 'string') {
+      return { name: new RegExp(t.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), code: t.code.toLowerCase() };
+    }
+    return { name: /ukrainian|українськ|украинск/i, code: 'uk' };
+  }
+
+  /** 'person' once the person has reached for captions in this meeting */
+  function ccChoice() {
+    const code = meetingCode();
+    if (!code) return ccChoiceHere;
+    try { return sessionStorage.getItem(`protokolCaptions:${code}`) || null; } catch (_) { return ccChoiceHere; }
+  }
+
+  function setCcChoice(v) {
+    ccChoiceHere = v;
+    const code = meetingCode();
+    if (!code) return;
+    try { sessionStorage.setItem(`protokolCaptions:${code}`, v); } catch (_) { /* storage off */ }
+  }
+
+  /** An element's own words, without the names of its icons */
+  function plainText(el) {
+    let s = '';
+    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let t = w.nextNode(); t; t = w.nextNode()) {
+      const p = t.parentElement;
+      if (p && p.closest(ICONS)) continue;
+      s += `${t.textContent} `;
+    }
+    return s.replace(/\s+/g, ' ').trim();
+  }
+
+  /** The shortest control on the page whose words pass the test (not inside `not`) */
+  function ccFind(test, not) {
+    let best = null;
+    let bestLen = Infinity;
+    for (const el of document.querySelectorAll(CC_CHOICES)) {
+      if (not && (el === not || el.contains(not) || not.contains(el))) continue;
+      if (el.closest('[data-participant-id]') || !el.getClientRects().length) continue;
+      const t = plainText(el);
+      if (!t || t.length > 80 || !test(t, el)) continue;
+      if (t.length < bestLen) { best = el; bestLen = t.length; }
+    }
+    return best;
+  }
+
+  /** Meet's chip with the captions' language, which opens the list of languages */
+  function ccChip() {
+    return ccFind((t, el) => t.length <= 40 && CC_LANG_NAME.test(t) && !CC_NOT_LANG.test(t)
+      && !el.closest(CC_LIST)
+      && (el.hasAttribute('aria-haspopup') || el.hasAttribute('aria-expanded')
+        || /arrow_drop_down|expand_more|keyboard_arrow_down/.test(el.textContent || '')), null);
+  }
+
+  /** The wanted language in an open list of languages */
+  function ccOption(target) {
+    for (const el of document.querySelectorAll('[data-value]')) {
+      const v = (el.getAttribute('data-value') || '').toLowerCase();
+      if ((v === target.code || v.startsWith(`${target.code}-`) || v.startsWith(`${target.code}_`))
+        && (el.matches('[role="option"], [role="menuitemradio"], [role="radio"]') || el.closest(CC_LIST))) return el;
+    }
+    return ccFind((t, el) => t.length <= 60 && target.name.test(t) && !CC_NOT_LANG.test(t)
+      && (el.matches('[role="option"], [role="menuitemradio"], [role="menuitem"], [role="radio"]') || !!el.closest(CC_LIST)), null);
+  }
+
+  function ccStyle() {
+    if (document.getElementById('protokol-out-of-sight')) return;
+    const s = document.createElement('style');
+    s.id = 'protokol-out-of-sight';
+    s.textContent = `[${CC_OUT}]{position:fixed!important;left:-30000px!important;top:0!important;width:900px!important;opacity:0!important;pointer-events:none!important;}`;
+    (document.head || document.documentElement).appendChild(s);
+  }
+
+  function ccHidden() {
+    return !!(captionRegion && captionRegion.isConnected && captionRegion.closest(`[${CC_OUT}]`));
+  }
+
+  // The captions with their bar: the highest block around them that holds no
+  // participant tile and none of Meet's buttons below the call, and is low
+  function ccHide() {
+    if (!captionRegion || !captionRegion.isConnected || ccHidden()) return;
+    ccReveal();
+    ccStyle();
+    const high = (window.innerHeight || 800) * 0.45;
+    const button = captionsButton();
+    let el = captionRegion;
+    for (let up = el.parentElement; up && up !== document.body && up !== document.documentElement; up = up.parentElement) {
+      if (up.querySelector('[data-participant-id], [data-is-muted]') || (button && up.contains(button))) break;
+      if (up.getBoundingClientRect().height > high) break;
+      el = up;
+    }
+    el.setAttribute(CC_OUT, '');
+    note(`captions out of sight (${el.tagName.toLowerCase()}, ${el === captionRegion ? 'region' : 'block'})`);
+  }
+
+  function ccReveal() {
+    for (const el of document.querySelectorAll(`[${CC_OUT}]`)) el.removeAttribute(CC_OUT);
+  }
+
+  // Meet's own shortcut, as a key press on the page
+  function ccKey() {
+    for (const type of ['keydown', 'keyup']) {
+      const ev = new KeyboardEvent(type, { key: 'c', code: 'KeyC', bubbles: true, cancelable: true, composed: true });
+      try {
+        Object.defineProperty(ev, 'keyCode', { get: () => 67 });
+        Object.defineProperty(ev, 'which', { get: () => 67 });
+      } catch (_) { /* read-only */ }
+      document.body.dispatchEvent(ev);
+    }
+  }
+
+  // Test runs only: what Meet shows around its captions, to find their controls
+  function ccDump(why) {
+    if (!window.__protokolCaptionsDump) return;
+    const out = [];
+    const b = captionsButton();
+    if (b) out.push(`button «${b.getAttribute('aria-label') || ''}» pressed=${b.getAttribute('aria-pressed')} popup=${b.getAttribute('aria-haspopup')}`);
+    for (const el of document.querySelectorAll(CC_CHOICES)) {
+      if (out.length >= 14) break;
+      if (el.closest('[data-participant-id]') || !el.getClientRects().length) continue;
+      const near = captionRegion && captionRegion.parentElement && captionRegion.parentElement.contains(el);
+      if (!near && !el.closest(`${CC_LIST}, [role="dialog"], [${CC_OUT}]`)) continue;
+      const role = el.getAttribute('role') || el.tagName.toLowerCase();
+      out.push(`${role} «${plainText(el).slice(0, 40)}» value=${el.getAttribute('data-value') || ''} checked=${el.getAttribute('aria-checked') || ''}`);
+    }
+    note(`captions dump ${why}: ${out.join(' | ').slice(0, 900)}`);
+  }
+
+  // The person reaches for captions: while Protokol keeps them out of sight,
+  // the press shows them instead of turning them off; either way, from now
+  // on they are the person's
+  function ccIntent(e) {
+    if (captionsOn() === true && ccHidden()) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      ccSwallowUntil = Date.now() + 1500;
+      ccReveal();
+      note('captions shown to the person');
+    }
+    if (ccChoice() !== 'person') setCcChoice('person');
+  }
+
+  const ccOnButton = (t) => {
+    const b = captionsButton();
+    return !!(b && t && t.nodeType === Node.ELEMENT_NODE && (t === b || b.contains(t)));
+  };
+  const editable = (t) => !!(t && t.closest && t.closest('input, textarea, [contenteditable=""], [contenteditable="true"]'));
+
+  try {
+    document.addEventListener('pointerdown', (e) => {
+      if (e.isTrusted && ccOnButton(e.target)) ccIntent(e);
+    }, true);
+    // The rest of the same press must not reach Meet either
+    for (const type of ['pointerup', 'mousedown', 'mouseup', 'click']) {
+      document.addEventListener(type, (e) => {
+        if (e.isTrusted && Date.now() < ccSwallowUntil && ccOnButton(e.target)) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+      }, true);
+    }
+    document.addEventListener('keydown', (e) => {
+      if (!e.isTrusted || e.metaKey || e.ctrlKey || e.altKey) return;
+      const shortcut = e.code === 'KeyC' && !editable(e.target);
+      const press = (e.key === 'Enter' || e.key === ' ') && ccOnButton(e.target);
+      if (shortcut || press) ccIntent(e);
+    }, true);
+  } catch (e) {
+    note(`captions listeners: ${e && e.message}`);
+  }
+
+  function ccLangTick() {
+    const chip = ccChip();
+    const text = chip ? plainText(chip) : null;
+    ccLang = text ? text.slice(0, 40) : null;
+    const target = ccTarget();
+    if (!chip || target.name.test(text)) return;
+    const now = Date.now();
+    if (now - ccLangAt < 700) return;
+    const option = ccOption(target);
+    if (option) {
+      ccLangAt = now;
+      option.click();
+      note(`captions language chosen: ${plainText(option).slice(0, 40)}`);
+      return;
+    }
+    if (ccLangTries >= CC_LANG_TRIES) {
+      // A list left open by the last try is closed again
+      if (chip.getAttribute('aria-expanded') === 'true') { ccLangAt = now; chip.click(); }
+      return;
+    }
+    if (now - ccLangAt < CC_WAIT_MS) return;
+    ccLangTries += 1;
+    ccLangAt = now;
+    chip.click();
+    note(`captions language list opened (${ccLangTries}), was «${ccLang}»`);
+    setTimeout(() => { try { ccDump('language list'); } catch (_) { /* page changing */ } }, 600);
+  }
+
+  function ccTick() {
+    const page = `${meetingCode() || location.pathname}|${tileCount > 0}`;
+    if (page !== ccPage) {
+      ccPage = page;
+      ccTries = 0;
+      ccLangTries = 0;
+    }
+    if (!(tileCount > 0)) { ccState = 'not in call'; return; }
+    if (ccChoice() === 'person') {
+      if (ccHidden()) ccReveal();
+      ccState = 'person';
+      return;
+    }
+    const on = captionsOn();
+    if (on === true) {
+      if (!captionRegion || !captionRegion.isConnected) captionWatch();
+      ccHide();
+      ccLangTick();
+      ccState = ccHidden() ? 'on, out of sight' : 'on';
+      return;
+    }
+    const b = captionsButton();
+    if (!b) { ccState = 'no button'; return; }
+    // Nothing is pressed while it is unclear whether they are on: a press
+    // could turn them off
+    if (on !== false) { ccState = 'state unknown'; return; }
+    const now = Date.now();
+    // A menu opened by the last press: its «Turn on captions»
+    if (ccPressedAt && now - ccPressedAt < CC_WAIT_MS * 2) {
+      const item = ccFind((t, el) => CC_TURN_ON.test(t)
+        || (CC_SWITCH.test(t) && (el.getAttribute('aria-checked') === 'false' || el.getAttribute('aria-pressed') === 'false')), b);
+      if (item) {
+        ccPressedAt = now;
+        item.click();
+        note(`captions: «${plainText(item).slice(0, 40)}» pressed`);
+        return;
+      }
+    }
+    if (ccTries >= CC_TRIES) { ccState = 'not turned on'; return; }
+    ccState = 'turning on';
+    if (now - ccPressedAt < CC_WAIT_MS) return;
+    ccTries += 1;
+    ccPressedAt = now;
+    // The shortcut first (nothing opens on the screen), then the button
+    if (ccTries % 2 === 1) {
+      ccKey();
+      note(`captions: key c (${ccTries})`);
+    } else {
+      b.click();
+      note(`captions: button pressed (${ccTries})`);
+      setTimeout(() => { try { ccDump('after the button'); } catch (_) { /* page changing */ } }, 600);
+    }
+  }
+
   // ── Report ───────────────────────────────────────────────────────────────
 
   function structure() {
@@ -517,6 +915,7 @@
   }
 
   function report() {
+    try { captionPass(); } catch (e) { note(`caption: ${e && e.message}`); }
     const frames = litFrames.splice(0, litFrames.length);
     const ft = frameTimes.splice(0, frameTimes.length);
     const out = [];
@@ -550,6 +949,16 @@
       cam: camOff(),
       self: selfName,
       names,
+      // Meet's captions button: true on, false off, null not on the page
+      cc: captionsOn(),
+      // Caption texts that appeared or changed since the last report
+      captions: captionOut.splice(0, captionOut.length),
+      // What Protokol does with the captions: 'on, out of sight', 'on' (could
+      // not be hidden), 'person' (left to the person), 'turning on', 'not
+      // turned on', 'no button', 'state unknown', 'not in call'; and their
+      // language as Meet shows it
+      ccAuto: ccState,
+      ccLang,
       lit: frames,
       ft,
       classHits,
@@ -566,8 +975,10 @@
 
   setInterval(() => { try { levelTick(); } catch (e) { note(`level: ${e && e.message}`); } }, LEVEL_MS);
   setInterval(() => { try { tileTick(); } catch (e) { note(`tile: ${e && e.message}`); } }, TILE_MS);
-  setInterval(() => { try { rescan(); classTick(); } catch (e) { note(`scan: ${e && e.message}`); } }, RESCAN_MS);
+  setInterval(() => { try { rescan(); classTick(); captionWatch(); } catch (e) { note(`scan: ${e && e.message}`); } }, RESCAN_MS);
+  setInterval(() => { try { captionPass(); } catch (e) { note(`caption: ${e && e.message}`); } }, CAPTION_MS);
   setInterval(() => { try { report(); } catch (e) { note(`report: ${e && e.message}`); } }, REPORT_MS);
   setInterval(() => { try { micTick(); } catch (e) { note(`mic: ${e && e.message}`); } }, 250);
   setInterval(() => { try { camTick(); } catch (e) { note(`camera: ${e && e.message}`); } }, 250);
+  setInterval(() => { try { ccTick(); } catch (e) { note(`captions: ${e && e.message}`); } }, CC_TICK_MS);
 })();

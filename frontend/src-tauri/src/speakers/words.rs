@@ -16,7 +16,7 @@ pub const WORDS_FILE: &str = "words.json";
 
 /// One transcribed piece of the recording with its words' times (seconds
 /// from the start of the recording)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PieceWords {
     pub text: String,
     pub start: f64,

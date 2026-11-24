@@ -40,6 +40,8 @@ pub struct Facts {
     pub auto_fixes: Option<(usize, usize)>,
     /// Corrections by kind over the newest checked meetings: (meetings, words, kinds)
     pub edits: Option<(usize, usize, super::corrected::Edits)>,
+    /// Meet's captions against the corrections, over the newest checked meetings that have them
+    pub captions: Option<super::captions_check::CaptionsCheck>,
 }
 
 /// A number the Ukrainian way: decimal comma
@@ -150,6 +152,26 @@ pub fn lines(f: &Facts) -> Vec<Line> {
         }
         value.push_str(&format!("; іншому мовцю {} рядків, лише розділові знаки {}", e.speaker_lines, e.punctuation_lines));
         add("edits", &format!("Правки за видами, останні {meetings} нарад"), value);
+        if e.names > 0 {
+            add("names", "Правки назв зі словника", format!("{}: з малої літери {}, повтори в тій самій нараді {}", e.names, e.names_lower, e.names_repeats));
+        }
+        if w > 0 {
+            add("repeats", "Повторні правки в тій самій нараді", format!("{} з {} виправлених слів", e.repeats, w));
+        }
+    }
+    if let Some(c) = f.captions.filter(|c| c.covered > 0) {
+        let pct = |a: usize, b: usize| num(100.0 * a as f64 / b.max(1) as f64, 0);
+        add(
+            "captions",
+            &format!("Субтитри Meet, {} нарад", c.meetings),
+            format!(
+                "є для {}% слів; інше слово в субтитрах у {}% слів, з них виправлено {}%; позначили б {}% виправлених слів",
+                pct(c.covered, c.words),
+                pct(c.flagged, c.covered),
+                pct(c.corrected_flagged, c.flagged),
+                pct(c.corrected_flagged, c.corrected)
+            ),
+        );
     }
     if let Some((applied, undone)) = f.auto_fixes {
         add("auto_fixes", "Автовиправлення", format!("спрацювало {applied}, скасовано {undone}"));
@@ -272,7 +294,12 @@ mod tests {
             checked_hours: 3.04,
             history: vec![stopped, checked_run()],
             auto_fixes: Some((41, 3)),
-            edits: Some((5, 2000, super::super::corrected::Edits { names: 40, numbers: 20, fillers: 30, endings: 10, speaker_lines: 7, punctuation_lines: 12, ..Default::default() })),
+            captions: None,
+            edits: Some((
+                5,
+                2000,
+                super::super::corrected::Edits { names: 40, numbers: 20, fillers: 30, endings: 10, speaker_lines: 7, punctuation_lines: 12, names_lower: 9, names_repeats: 6, repeats: 15, ..Default::default() },
+            )),
         };
         let l = lines(&f);
         let value = |key: &str| l.iter().find(|x| x.key == key).map(|x| x.value.clone()).unwrap_or_default();
@@ -285,6 +312,18 @@ mod tests {
         assert_eq!(value("underlines"), "240 на годину, з них помилки 62%, позначають 60% помилок");
         assert_eq!(value("auto_fixes"), "спрацювало 41, скасовано 3");
         assert_eq!(value("edits"), "5,0% слів: назви 2,0%, паразити 1,5%, числа 1,0%, закінчення 0,5%; іншому мовцю 7 рядків, лише розділові знаки 12");
+        assert_eq!(value("names"), "40: з малої літери 9, повтори в тій самій нараді 6");
+        assert_eq!(value("repeats"), "15 з 100 виправлених слів");
+        assert!(l.iter().all(|x| x.key != "captions"), "no captions, no line");
+        let f = Facts {
+            app_version: "0.4.7".into(),
+            captions: Some(super::super::captions_check::CaptionsCheck { meetings: 2, words: 1000, covered: 900, flagged: 90, corrected: 60, corrected_flagged: 39 }),
+            ..Default::default()
+        };
+        let l = lines(&f);
+        let c = l.iter().find(|x| x.key == "captions").expect("captions line");
+        assert_eq!(c.label, "Субтитри Meet, 2 нарад");
+        assert_eq!(c.value, "є для 90% слів; інше слово в субтитрах у 10% слів, з них виправлено 43%; позначили б 65% виправлених слів");
         // No dates, ids or per-meeting numbers anywhere
         assert!(!l.iter().any(|x| x.value.contains("2026") || x.value.contains("16,0")));
     }

@@ -28,13 +28,14 @@ mod tests {
         state.full(p, samples).unwrap();
         let secs = started.elapsed().as_secs_f64();
         let mut out = Vec::new();
-        for i in 0..state.full_n_segments().unwrap() {
-            for j in 0..state.full_n_tokens(i).unwrap() {
-                let Ok(text) = state.full_get_token_text(i, j) else { continue };
+        for seg in state.as_iter() {
+            for j in 0..seg.n_tokens() {
+                let Some(token) = seg.get_token(j) else { continue };
+                let Ok(text) = token.to_str() else { continue };
                 if text.starts_with("[_") || text.starts_with("<|") {
                     continue;
                 }
-                let d = state.full_get_token_data(i, j).unwrap();
+                let d = token.token_data();
                 if text.starts_with(' ') || out.is_empty() {
                     out.push((text.trim().to_string(), d.t0 as f64 / 100.0, d.t1 as f64 / 100.0, d.t_dtw as f64 / 100.0));
                 }

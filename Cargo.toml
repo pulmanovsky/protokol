@@ -16,3 +16,7 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.32.0", features = ["full"] }
+
+[patch.crates-io]
+# whisper.cpp 1.9.5 instead of the 1.8.3 the published crate carries (vendor/whisper-rs-sys/README.md)
+whisper-rs-sys = { path = "vendor/whisper-rs-sys" }

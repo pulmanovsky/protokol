@@ -1364,4 +1364,53 @@ async fn eval_real_recording() {
         let tag = std::env::var("PROTOKOL_EVAL_TAG").unwrap_or_else(|_| "both".to_string());
         rescore(&out_dir(), &tag);
     }
+    if stage == "captions" {
+        run_captions();
+    }
+}
+
+/// Meet's captions against Whisper on a recorded test call whose words are
+/// known. PROTOKOL_EVAL_FOLDER: the recording's folder after «Спікери» ran
+/// (words.json, and meet.json with the captions); PROTOKOL_EVAL_REFERENCE:
+/// a text file with what was said, in order. Prints and logs, numbers only:
+/// the error rate of Whisper and of the captions against the reference; the
+/// share of Whisper words the captions disagree with, and how many of
+/// Whisper's wrong words are among them; Whisper's missing words and the
+/// remarks found only in the captions (how many of their words are in the
+/// reference).
+fn run_captions() {
+    use crate::quality::score::{align, norm};
+    let folder = PathBuf::from(std::env::var("PROTOKOL_EVAL_FOLDER").expect("PROTOKOL_EVAL_FOLDER"));
+    let reference_text = std::fs::read_to_string(std::env::var("PROTOKOL_EVAL_REFERENCE").expect("PROTOKOL_EVAL_REFERENCE")).expect("reference");
+    let reference: Vec<String> = reference_text.split_whitespace().map(norm).filter(|w| !w.is_empty()).collect();
+    let pieces = crate::speakers::words::load(&folder).expect("words.json: run «Спікери» on the recording first");
+    let call = crate::meet::frames::load_folder(&folder).expect("meet.json");
+    let start = crate::meet::frames::recording_start_ms(&folder).expect("metadata.json");
+    let caps = crate::meet::captions::words(&call.captions, start);
+    let cmp = crate::meet::captions::compare(&pieces, &caps);
+
+    let heard: Vec<String> = pieces.iter().flat_map(|p| p.words.iter().map(|(w, _)| norm(w))).filter(|w| !w.is_empty()).collect();
+    let flags: Vec<Option<bool>> = pieces.iter().zip(&cmp.agree).flat_map(|(p, a)| p.words.iter().zip(a).filter(|(w, _)| !norm(&w.0).is_empty()).map(|(_, f)| *f)).collect();
+    let rate = |a: &crate::quality::score::Alignment| 100.0 * (a.substituted + a.deleted + a.inserted) as f64 / a.reference.max(1) as f64;
+    let w = align(&reference, &heard);
+    let cap_words: Vec<String> = caps.iter().map(|c| c.0.clone()).collect();
+    let c = align(&reference, &cap_words);
+    let covered = flags.iter().filter(|f| f.is_some()).count();
+    let flagged = flags.iter().filter(|f| **f == Some(false)).count();
+    let wrong = w.correct.iter().filter(|ok| !**ok).count();
+    let wrong_flagged = w.correct.iter().zip(&flags).filter(|(ok, f)| !**ok && **f == Some(false)).count();
+    let ref_set: std::collections::HashSet<&String> = reference.iter().collect();
+    let missed_words: usize = cmp.missed.iter().map(|m| m.3.split_whitespace().count()).sum();
+    let missed_in_ref: usize = cmp.missed.iter().flat_map(|m| m.3.split_whitespace()).filter(|x| ref_set.contains(&x.to_string())).count();
+    let lines = [
+        format!("captions: {} blocks, {} words; reference {} words", call.captions.len(), cap_words.len(), reference.len()),
+        format!("errors: Whisper {:.1}% (wrong {} missing {} extra {}), captions {:.1}% (wrong {} missing {} extra {})",
+            rate(&w), w.substituted, w.deleted, w.inserted, rate(&c), c.substituted, c.deleted, c.inserted),
+        format!("Whisper words with captions near: {covered} of {}; captions disagree on {flagged} ({:.1}%)", heard.len(), 100.0 * flagged as f64 / covered.max(1) as f64),
+        format!("Whisper's wrong or extra words: {wrong}; of them where the captions disagree: {wrong_flagged}"),
+        format!("remarks only in the captions: {} ({missed_words} words, {missed_in_ref} of them in the reference); Whisper's missing words: {}", cmp.missed.len(), w.deleted),
+    ];
+    for l in &lines {
+        log_timing(&format!("captions check: {l}"));
+    }
 }
