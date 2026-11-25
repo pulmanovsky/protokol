@@ -86,10 +86,44 @@ const TEST_ADMIT_JS: &str = r#"if (location.hostname === 'meet.google.com' && wi
 }, 2000);
 "#;
 
+/// Test runs only: Meet gets a silent microphone and a blank camera made in
+/// the page, so a rebuilt test copy joins a call without asking macOS for
+/// the real devices (no permission prompt nobody is there to answer)
+#[cfg(feature = "test-hooks")]
+const TEST_NO_DEVICES_JS: &str = r#"if (location.hostname === 'meet.google.com' && navigator.mediaDevices) {
+  navigator.mediaDevices.getUserMedia = async (c) => {
+    const out = new MediaStream();
+    if (c && c.audio) {
+      const ctx = new AudioContext();
+      const dst = ctx.createMediaStreamDestination();
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      const o = ctx.createOscillator();
+      o.connect(g);
+      g.connect(dst);
+      o.start();
+      for (const t of dst.stream.getAudioTracks()) out.addTrack(t);
+    }
+    if (c && c.video) {
+      const cv = document.createElement('canvas');
+      cv.width = 320;
+      cv.height = 180;
+      const x = cv.getContext('2d');
+      x.fillStyle = '#222';
+      x.fillRect(0, 0, 320, 180);
+      for (const t of cv.captureStream(5).getVideoTracks()) out.addTrack(t);
+    }
+    return out;
+  };
+}
+"#;
+
 /// The script for the Meet page. Test runs only (`test-hooks`, never the
 /// release dmg): PROTOKOL_TEST_CAPTIONS_LANG=<name>:<code> (English:en) makes
 /// it set another captions language, and it notes in its reports what Meet
-/// shows around its captions, to follow how they were turned on.
+/// shows around its captions, to follow how they were turned on; the other
+/// PROTOKOL_TEST_* switches below admit guests, stand in for the devices and
+/// copy each stream's sound.
 fn page_script() -> String {
     #[cfg(feature = "test-hooks")]
     {
@@ -100,6 +134,14 @@ fn page_script() -> String {
         // PROTOKOL_TEST_ADMIT=1: guests asking to join a test call are let in
         if std::env::var("PROTOKOL_TEST_ADMIT").as_deref() == Ok("1") {
             pre.push_str(TEST_ADMIT_JS);
+        }
+        // PROTOKOL_TEST_NO_DEVICES=1: a silent microphone and a blank camera for Meet
+        if std::env::var("PROTOKOL_TEST_NO_DEVICES").as_deref() == Ok("1") {
+            pre.push_str(TEST_NO_DEVICES_JS);
+        }
+        // PROTOKOL_TEST_MEET_SLOTS=1: the script also copies each stream's own sound
+        if std::env::var("PROTOKOL_TEST_MEET_SLOTS").as_deref() == Ok("1") {
+            pre.push_str("window.__protokolSlots = true;\n");
         }
         return format!("{pre}{CAPTURE_JS}");
     }

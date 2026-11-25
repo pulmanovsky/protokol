@@ -49,6 +49,16 @@ fn num(x: f64, digits: usize) -> String {
     format!("{x:.digits$}").replace('.', ",")
 }
 
+/// «1 запис», «3 записи», «5 записів»
+fn recordings(n: usize) -> String {
+    let word = match (n % 10, n % 100) {
+        (1, r) if r != 11 => "запис",
+        (2..=4, r) if !(12..=14).contains(&r) => "записи",
+        _ => "записів",
+    };
+    format!("{n} {word}")
+}
+
 /// Change from `before` to `after` in percent, with a real minus sign
 fn change(before: usize, after: usize) -> String {
     let p = (100.0 * (after as f64 - before as f64) / before as f64).round() as i64;
@@ -159,17 +169,33 @@ pub fn lines(f: &Facts) -> Vec<Line> {
             add("repeats", "Повторні правки в тій самій нараді", format!("{} з {} виправлених слів", e.repeats, w));
         }
     }
-    if let Some(c) = f.captions.filter(|c| c.covered > 0) {
+    if let Some(c) = f.captions.filter(|c| c.any.covered > 0) {
         let pct = |a: usize, b: usize| num(100.0 * a as f64 / b.max(1) as f64, 0);
+        // Flagged words, how many of them were corrected, how many corrections they catch
+        // per hour of checked speech, as the underlines are counted
+        let hours = c.seconds as f64 / 3600.0;
+        let per_hour = |n: usize| if hours > 0.0 { format!(" ({} на годину)", (n as f64 / hours).round()) } else { String::new() };
+        let how = |x: &super::captions_check::Flags| {
+            format!(
+                "{}% слів{}, з них виправлено {}%, позначили б {}% виправлених слів",
+                pct(x.flagged, x.covered),
+                per_hour(x.flagged),
+                pct(x.corrected_flagged, x.flagged),
+                pct(x.corrected_flagged, x.corrected)
+            )
+        };
         add(
             "captions",
-            &format!("Субтитри Meet, {} нарад", c.meetings),
+            &format!("Субтитри Meet, {}", recordings(c.meetings)),
+            format!("є для {}% слів; розбіжності у {}; до уточнення розбіжності у {}% слів", pct(c.any.covered, c.words), how(&c.any), pct(c.before.flagged, c.before.covered)),
+        );
+        add("captions_filters", "Субтитри Meet, суворіші позначки", format!("лише інше слово: {}; лише від двох слів підряд: {}", how(&c.other), how(&c.runs)));
+        add(
+            "captions_records",
+            "Субтитри Meet, записи",
             format!(
-                "є для {}% слів; інше слово в субтитрах у {}% слів, з них виправлено {}%; позначили б {}% виправлених слів",
-                pct(c.covered, c.words),
-                pct(c.flagged, c.covered),
-                pct(c.corrected_flagged, c.flagged),
-                pct(c.corrected_flagged, c.corrected)
+                "українською {}, іншою мовою {}, мова невідома {}; зсунуто більш як на 3 с {}, пауза в записі {}, не вдалося вирівняти {}; розбіжності в більшості слів {}",
+                c.lang_uk, c.lang_other, c.lang_unknown, c.shifted, c.jumped, c.unfitted, c.mostly_different
             ),
         );
     }
@@ -315,15 +341,40 @@ mod tests {
         assert_eq!(value("names"), "40: з малої літери 9, повтори в тій самій нараді 6");
         assert_eq!(value("repeats"), "15 з 100 виправлених слів");
         assert!(l.iter().all(|x| x.key != "captions"), "no captions, no line");
+        use super::super::captions_check::{CaptionsCheck, Flags};
         let f = Facts {
-            app_version: "0.4.7".into(),
-            captions: Some(super::super::captions_check::CaptionsCheck { meetings: 2, words: 1000, covered: 900, flagged: 90, corrected: 60, corrected_flagged: 39 }),
+            app_version: "0.4.8".into(),
+            captions: Some(CaptionsCheck {
+                meetings: 3,
+                words: 1000,
+                seconds: 1800,
+                any: Flags { covered: 900, flagged: 90, corrected: 60, corrected_flagged: 39 },
+                other: Flags { covered: 900, flagged: 45, corrected: 60, corrected_flagged: 30 },
+                runs: Flags { covered: 900, flagged: 20, corrected: 60, corrected_flagged: 15 },
+                before: Flags { covered: 880, flagged: 352, corrected: 60, corrected_flagged: 55 },
+                lang_uk: 2,
+                lang_unknown: 1,
+                shifted: 2,
+                jumped: 1,
+                ..Default::default()
+            }),
             ..Default::default()
         };
         let l = lines(&f);
-        let c = l.iter().find(|x| x.key == "captions").expect("captions line");
-        assert_eq!(c.label, "Субтитри Meet, 2 нарад");
-        assert_eq!(c.value, "є для 90% слів; інше слово в субтитрах у 10% слів, з них виправлено 43%; позначили б 65% виправлених слів");
+        let value = |key: &str| l.iter().find(|x| x.key == key).map(|x| (x.label.clone(), x.value.clone())).expect(key);
+        assert_eq!(
+            value("captions"),
+            ("Субтитри Meet, 3 записи".into(), "є для 90% слів; розбіжності у 10% слів (180 на годину), з них виправлено 43%, позначили б 65% виправлених слів; до уточнення розбіжності у 40% слів".into())
+        );
+        assert_eq!(
+            value("captions_filters").1,
+            "лише інше слово: 5% слів (90 на годину), з них виправлено 67%, позначили б 50% виправлених слів; лише від двох слів підряд: 2% слів (40 на годину), з них виправлено 75%, позначили б 25% виправлених слів"
+        );
+        assert_eq!(
+            value("captions_records").1,
+            "українською 2, іншою мовою 0, мова невідома 1; зсунуто більш як на 3 с 2, пауза в записі 1, не вдалося вирівняти 0; розбіжності в більшості слів 0"
+        );
+        assert_eq!((recordings(1), recordings(11), recordings(22), recordings(5)), ("1 запис".into(), "11 записів".into(), "22 записи".into(), "5 записів".into()));
         // No dates, ids or per-meeting numbers anywhere
         assert!(!l.iter().any(|x| x.value.contains("2026") || x.value.contains("16,0")));
     }

@@ -54,7 +54,7 @@ fn is_number(word: &str) -> bool {
 
 /// The same word with another ending: at most three letters differ, at the
 /// end, and the common start is most of the word
-fn same_stem(a: &str, b: &str) -> bool {
+pub(crate) fn same_stem(a: &str, b: &str) -> bool {
     let common = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
     let longer = a.chars().count().max(b.chars().count());
     common >= 3 && longer - common <= 3 && common * 5 > longer * 3

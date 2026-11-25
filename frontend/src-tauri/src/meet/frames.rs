@@ -46,6 +46,9 @@ pub struct MeetCall {
     /// Meet's own captions, when they were on (the last version of each)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub captions: Vec<super::captions::Caption>,
+    /// The captions' language as Meet showed it last («Ukrainian (Ukraine)»)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub captions_lang: String,
 }
 
 impl MeetCall {
@@ -67,6 +70,9 @@ impl MeetCall {
     fn add_report(&mut self, r: &Value) -> bool {
         // Captions are text, not who is lit: kept from a hidden page too
         super::captions::add_report(&mut self.captions, r);
+        if let Some(lang) = r.get("ccLang").and_then(|v| v.as_str()).filter(|l| !l.trim().is_empty()) {
+            self.captions_lang = lang.trim().to_string();
+        }
         // While the page is hidden Meet can stop updating the tiles and keep
         // the last speaker's lit: such frames say nothing of who speaks
         if frozen(r) {
@@ -120,6 +126,7 @@ impl MeetCall {
         let mut out = MeetCall { v: 1, ..Default::default() };
         out.captions = std::mem::take(&mut self.captions).into_iter().filter(|c| c.t1 >= from && c.t0 <= to).collect();
         out.captions.sort_by(|a, b| a.t0.total_cmp(&b.t0));
+        out.captions_lang = std::mem::take(&mut self.captions_lang);
         let names = std::mem::take(&mut self.names);
         for i in order {
             out.t.push(self.t[i]);

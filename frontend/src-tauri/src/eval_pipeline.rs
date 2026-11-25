@@ -1386,14 +1386,23 @@ fn run_captions() {
     let pieces = crate::speakers::words::load(&folder).expect("words.json: run «Спікери» on the recording first");
     let call = crate::meet::frames::load_folder(&folder).expect("meet.json");
     let start = crate::meet::frames::recording_start_ms(&folder).expect("metadata.json");
-    let caps = crate::meet::captions::words(&call.captions, start);
-    let cmp = crate::meet::captions::compare(&pieces, &caps);
+    use crate::meet::captions::{compare, compare_as_before, fit_clock, words, Comparison, Said};
+    let raw = words(&call.captions, start);
+    let mut caps = raw.clone();
+    let heard_times: Vec<(String, f64)> = pieces.iter().flat_map(|p| p.words.iter().map(|(w, t)| (norm(w), *t))).collect();
+    let shifts = fit_clock(&mut caps, &heard_times);
+    let cmp = compare(&pieces, &caps);
 
     let heard: Vec<String> = pieces.iter().flat_map(|p| p.words.iter().map(|(w, _)| norm(w))).filter(|w| !w.is_empty()).collect();
-    let flags: Vec<Option<bool>> = pieces.iter().zip(&cmp.agree).flat_map(|(p, a)| p.words.iter().zip(a).filter(|(w, _)| !norm(&w.0).is_empty()).map(|(_, f)| *f)).collect();
+    // Flagged: the captions have something else there (or nothing)
+    let flags: Vec<Option<bool>> = pieces
+        .iter()
+        .zip(&cmp.said)
+        .flat_map(|(p, a)| p.words.iter().zip(a).filter(|(w, _)| !norm(&w.0).is_empty()).map(|(_, f)| f.map(|s| s == crate::meet::captions::Said::Same)))
+        .collect();
     let rate = |a: &crate::quality::score::Alignment| 100.0 * (a.substituted + a.deleted + a.inserted) as f64 / a.reference.max(1) as f64;
     let w = align(&reference, &heard);
-    let cap_words: Vec<String> = caps.iter().map(|c| c.0.clone()).collect();
+    let cap_words: Vec<String> = caps.iter().map(|c| c.word.clone()).collect();
     let c = align(&reference, &cap_words);
     let covered = flags.iter().filter(|f| f.is_some()).count();
     let flagged = flags.iter().filter(|f| **f == Some(false)).count();
@@ -1402,8 +1411,29 @@ fn run_captions() {
     let ref_set: std::collections::HashSet<&String> = reference.iter().collect();
     let missed_words: usize = cmp.missed.iter().map(|m| m.3.split_whitespace().count()).sum();
     let missed_in_ref: usize = cmp.missed.iter().flat_map(|m| m.3.split_whitespace()).filter(|x| ref_set.contains(&x.to_string())).count();
+    // The same counted three ways: as until 0.4.7, fitted without moving the clock, fitted after it
+    let ways = [("as before", compare_as_before(&pieces, &raw)), ("fitted, clock as kept", compare(&pieces, &raw)), ("fitted, clock moved", compare(&pieces, &caps))];
+    let way = |c: &Comparison| {
+        let f: Vec<Option<bool>> = pieces
+            .iter()
+            .zip(&c.said)
+            .flat_map(|(p, a)| p.words.iter().zip(a).filter(|(w, _)| !norm(&w.0).is_empty()).map(|(_, f)| f.map(|s| s == Said::Same)))
+            .collect();
+        let flagged = f.iter().filter(|x| **x == Some(false)).count();
+        let caught = w.correct.iter().zip(&f).filter(|(ok, x)| !**ok && **x == Some(false)).count();
+        let other = pieces
+            .iter()
+            .zip(&c.said)
+            .flat_map(|(p, a)| p.words.iter().zip(a).filter(|(w, _)| !norm(&w.0).is_empty()).map(|(_, f)| *f))
+            .filter(|x| matches!(x, Some(Said::Other | Said::Nothing)))
+            .count();
+        format!("covered {}, disagree {flagged} ({:.1}%), another word {other}, Whisper errors caught {caught}", f.iter().filter(|x| x.is_some()).count(), 100.0 * flagged as f64 / f.len().max(1) as f64)
+    };
+    for (name, c) in &ways {
+        log_timing(&format!("captions check ({name}): {}", way(c)));
+    }
     let lines = [
-        format!("captions: {} blocks, {} words; reference {} words", call.captions.len(), cap_words.len(), reference.len()),
+        format!("captions: {} blocks, {} words; reference {} words; clock shifts (s) {:?}", call.captions.len(), cap_words.len(), reference.len(), shifts.iter().map(|s| (s * 10.0).round() / 10.0).collect::<Vec<_>>()),
         format!("errors: Whisper {:.1}% (wrong {} missing {} extra {}), captions {:.1}% (wrong {} missing {} extra {})",
             rate(&w), w.substituted, w.deleted, w.inserted, rate(&c), c.substituted, c.deleted, c.inserted),
         format!("Whisper words with captions near: {covered} of {}; captions disagree on {flagged} ({:.1}%)", heard.len(), 100.0 * flagged as f64 / covered.max(1) as f64),
