@@ -128,7 +128,7 @@ impl<R: Runtime> ConsentManager<R> {
     fn get_settings_path() -> Result<PathBuf> {
         // In the app's own folder
         let config = dirs::config_dir().ok_or_else(|| anyhow!("Could not find config directory"))?;
-        let path = config.join(crate::identity::IDENTIFIER).join("notifications.json");
+        let path = config.join(crate::identity::running()).join("notifications.json");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }

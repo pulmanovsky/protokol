@@ -34,6 +34,13 @@ pub struct Meeting {
     pub tuned: bool,
     /// The corrections by kind
     pub edits: Edits,
+    /// A Meet call heard stream by stream (`speakers::slots`)
+    pub streams: bool,
+    /// Recorded in the Meet window
+    pub meet: bool,
+    /// Meet's separate streams are kept with the recording, whether or not
+    /// its text came from them
+    pub streams_kept: bool,
 }
 
 /// Corrections of checked lines by kind: words, and whole lines
@@ -252,12 +259,19 @@ pub async fn quality(pool: &sqlx::SqlitePool, models: &Path, model_file: &str) -
         if words < MIN_WORDS {
             continue;
         }
+        let folder = crate::speakers::lines::folder_of(pool, &id).await;
+        let streams = folder.as_ref().is_some_and(|f| crate::speakers::words::load(f).is_some_and(|w| w.iter().any(|p| p.who.is_some())));
+        let meet = folder.as_ref().is_some_and(|f| f.join(crate::meet::frames::FOLDER_FILE).exists());
+        let streams_kept = folder.as_ref().is_some_and(|f| f.join(crate::speakers::slots::FOLDER_FILE).exists());
         meetings.push(Meeting {
             date: at.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string(),
             words,
             corrected: 100.0 * changed as f64 / words as f64,
             tuned: super::versions::tuned_by(&changes, copied_at, at),
             edits: kinds,
+            streams,
+            meet,
+            streams_kept,
         });
     }
     meetings.reverse();

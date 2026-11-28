@@ -731,6 +731,19 @@ impl WhisperEngine {
             // Removed debug log to reduce I/O overhead in transcription hot path
         }
 
+        // Measurement only: listed words favoured while decoding (see `boost`).
+        // The list is held until `full` returns: whisper.cpp reads it there.
+        let boost = super::boost::current();
+        if let Some(boost) = &boost {
+            let trie = boost.trie(ctx);
+            // SAFETY: `trie` lives inside `boost`, which outlives `state.full`
+            // below; the callback only reads it and writes the scores it is given
+            unsafe {
+                params.set_filter_logits_callback(Some(super::boost::filter));
+                params.set_filter_logits_callback_user_data(trie as *const super::boost::Trie as *mut std::ffi::c_void);
+            }
+        }
+
         let duration_seconds = audio_data.len() as f64 / 16000.0;
         let is_partial = duration_seconds < 15.0; // Consider chunks under 15s as partial
 

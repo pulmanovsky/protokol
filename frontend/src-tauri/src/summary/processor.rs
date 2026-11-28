@@ -1806,7 +1806,7 @@ mod tests {
     }
 
     fn three_speakers() -> (Vec<super::super::materials::Line>, Vec<super::super::materials::Report>) {
-        let long = "Склад перевірено, двадцять ящиків прийнято, документи передано до штабу, наступна перевірка в четвер о дев'ятій, відповідальний черговий зміни, зауважень немає, усе працює як треба, дякую за увагу.";
+        let long = "Склад перевірено, двадцять ящиків прийнято, документи передано до бухгалтерії, наступна перевірка в четвер о дев'ятій, відповідальний черговий зміни, зауважень немає, усе працює як треба, дякую за увагу.";
         let text = format!("[00:05] Спікер 1: {long}\n[01:10] Спікер 2: {long}\n[02:20] Спікер 3: {long}\n");
         let mut lines = super::super::materials::parse_transcript(&text);
         let reports = super::super::materials::speaker_reports(&mut lines).unwrap();

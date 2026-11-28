@@ -11,8 +11,8 @@
 // anywhere else: what Protokol sees is shown in its own toolbar above the
 // page. On the page itself it only presses Meet's own buttons: the
 // microphone when the secretary presses Protokol's (window.__protokolSetMic),
-// the camera off when joining, and the captions on, in Ukrainian, kept out of
-// sight (see «Captions on, out of sight» below). And so that Meet keeps
+// the camera off when joining, and the captions on, in Ukrainian (see
+// «Captions on» below). And so that Meet keeps
 // lighting the tiles while its window is minimised, the page is always told
 // it is visible and its animation frames keep coming (see «Minimised window»
 // below).
@@ -30,7 +30,60 @@
   if (window.top !== window) return;
   window.__protokolMeetProbe = true;
 
-  const VERSION = 11;
+  const VERSION = 12;
+  // Each stream's own sound is copied for the app while a recording runs
+  // (see slotTap), unless the app turned that off. TEST BUILDS ONLY
+  // (window.__protokolSlots): copied all the time, with each stream's CSRCs
+  const SLOTS = window.__protokolSlots === true;
+  const STREAMS = SLOTS || window.__protokolStreams !== false;
+  // What the app said in reply to the last report: a recording runs (and is not paused)
+  let recording = false;
+  // With no recording, and while one is paused, the page keeps only this
+  // much of the streams' sound, so a recording has it from a little before
+  // the page learned that it started or went on
+  const PRE_ROLL_MS = 6000;
+
+  // TEST BUILDS ONLY: Meet sends the loudest people over a few fixed audio
+  // streams and names the true source of each packet in its CSRC. The page's
+  // peer connections are kept so that each stream's receiver can say, every
+  // 100 ms, which sources are speaking on it now (see speakingSources)
+  const peerConnections = [];
+  if (SLOTS && typeof window.RTCPeerConnection === 'function') {
+    try {
+      const Orig = window.RTCPeerConnection;
+      const Wrapped = function (...args) { const pc = new Orig(...args); peerConnections.push(pc); return pc; };
+      Wrapped.prototype = Orig.prototype;
+      Object.setPrototypeOf(Wrapped, Orig);
+      window.RTCPeerConnection = Wrapped;
+      if (window.webkitRTCPeerConnection) window.webkitRTCPeerConnection = Wrapped;
+    } catch (e) {
+      note(`csrc: ${e && e.message}`);
+    }
+  }
+  // A CSRC entry stays listed for seconds after its source stops: only one
+  // heard within SOURCE_FRESH_MS and with a level above 0 is speaking now
+  const SOURCE_FRESH_MS = 150;
+  function receiverOf(s) {
+    if (s.rx && s.rx.track && s.rx.track.readyState !== 'ended' && s.rx.track.id === s.trackId) return s.rx;
+    s.rx = null;
+    for (const pc of peerConnections) {
+      if (pc.connectionState === 'closed') continue;
+      for (const r of pc.getReceivers()) {
+        if (r.track && r.track.id === s.trackId) { s.rx = r; return r; }
+      }
+    }
+    return null;
+  }
+  function speakingSources(s) {
+    const rx = s.trackId ? receiverOf(s) : null;
+    if (!rx || typeof rx.getContributingSources !== 'function') return [];
+    const now = Date.now();
+    try {
+      return rx.getContributingSources().filter((x) => now - x.timestamp <= SOURCE_FRESH_MS && x.audioLevel > 0).map((x) => x.source);
+    } catch (e) {
+      return [];
+    }
+  }
   const LEVEL_MS = 100;
   const TILE_MS = 200;
   const REPORT_MS = 2000;
@@ -156,6 +209,8 @@
       const track = stream.getAudioTracks()[0];
       const state = {
         index: nextIndex++,
+        trackId: track ? track.id : null,
+        src: [],
         id: stream.id.slice(0, 8),
         tag: el.tagName.toLowerCase(),
         analyser,
@@ -168,8 +223,67 @@
       };
       if (track) track.addEventListener('ended', () => { state.ended = true; });
       streams.set(stream.id, state);
+      if (STREAMS) slotTap(c, source, mute, state);
     } catch (e) {
       note(`connect ${el.tagName}: ${e && e.message}`);
+    }
+  }
+
+  // ── Each stream's own sound ──────────────────────────────────────────────
+  // 16 kHz 16-bit mono blocks with the wall clock of each block's start. While
+  // a recording runs they are sent with the report and the app keeps of them
+  // what sounded while it recorded (people talking at once are then heard
+  // apart); otherwise, and while the recording is paused, only the last
+  // PRE_ROLL_MS stay in the page and nothing is sent
+  function slotTap(c, source, sink, state) {
+    try {
+      const proc = c.createScriptProcessor(4096, 1, 1);
+      const step = c.sampleRate / 16000;
+      state.pcm = []; state.bt = []; state.bn = [];
+      proc.onaudioprocess = (e) => {
+        const x = e.inputBuffer.getChannelData(0);
+        const n = Math.floor(x.length / step);
+        const out = new Int16Array(n);
+        for (let i = 0; i < n; i++) {
+          let sum = 0; const a = Math.floor(i * step), b = Math.floor((i + 1) * step);
+          for (let k = a; k < b; k++) sum += x[k];
+          const v = sum / (b - a);
+          out[i] = Math.max(-32768, Math.min(32767, Math.round(v * 32767)));
+        }
+        state.pcm.push(out);
+        state.bt.push(Date.now() - Math.round(1000 * x.length / c.sampleRate));
+        state.bn.push(n);
+      };
+      source.connect(proc);
+      proc.connect(sink);
+      state.proc = proc;
+    } catch (e) {
+      note(`slot: ${e && e.message}`);
+    }
+  }
+  function slotOut() {
+    const out = [];
+    for (const s of streams.values()) {
+      if (!s.pcm || !s.pcm.length) continue;
+      const parts = s.pcm.splice(0, s.pcm.length);
+      const total = parts.reduce((a, p) => a + p.length, 0);
+      const all = new Int16Array(total);
+      let o = 0; for (const p of parts) { all.set(p, o); o += p.length; }
+      const bytes = new Uint8Array(all.buffer);
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      out.push({ i: s.index, id: s.id, bt: s.bt.splice(0, s.bt.length), bn: s.bn.splice(0, s.bn.length), pcm: btoa(bin) });
+    }
+    return out;
+  }
+
+  function slotTrim() {
+    const from = Date.now() - PRE_ROLL_MS;
+    for (const s of streams.values()) {
+      if (!s.pcm) continue;
+      let k = 0;
+      while (k < s.bt.length && s.bt[k] < from) k++;
+      if (k) { s.pcm.splice(0, k); s.bt.splice(0, k); s.bn.splice(0, k); }
     }
   }
 
@@ -179,6 +293,7 @@
 
   function levelTick() {
     for (const s of streams.values()) {
+      if (SLOTS) s.src.push(s.ended ? [] : speakingSources(s));
       if (s.ended) { s.levels.push(-1); continue; }
       s.analyser.getFloatTimeDomainData(s.buf);
       let sum = 0;
@@ -609,14 +724,14 @@
     }
   }
 
-  // ── Captions on, out of sight ────────────────────────────────────────────
+  // ── Captions on ──────────────────────────────────────────────────────────
   // So that every call in this window has the second text, Protokol turns
-  // Meet's captions on by itself once in the call, sets their language to
-  // Ukrainian and moves them out of sight: the call looks as before. Captions
-  // in Meet are only on this screen; no one else in the call is told. If the
-  // person reaches for captions themselves (Meet's captions button or the «c»
-  // key), they are shown at once and left to the person for the rest of the
-  // meeting: Protokol neither hides them nor turns them back on.
+  // Meet's captions on by itself once in the call and sets their language to
+  // Ukrainian; they stay on the screen as Meet shows them. Captions in Meet
+  // are only on this screen; no one else in the call is told. If the person
+  // reaches for captions themselves (Meet's captions button or the «c» key),
+  // they are left to the person for the rest of the meeting: Protokol does
+  // not turn them back on.
   const CC_TICK_MS = 1000;
   const CC_WAIT_MS = 2500;
   const CC_TRIES = 6;
@@ -627,7 +742,6 @@
   const CC_NOT_LANG = /translat|переклад|перевод/i;
   const CC_CHOICES = '[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="switch"], [role="radio"], [role="combobox"], button, [role="button"]';
   const CC_LIST = '[role="listbox"], [role="menu"], [role="radiogroup"]';
-  const CC_OUT = 'data-protokol-out-of-sight';
   const ICONS = '.google-symbols, .google-material-icons, .material-icons-extended, .material-symbols-outlined, i';
   let ccState = 'not in call';
   let ccTries = 0;
@@ -637,7 +751,6 @@
   let ccLang = null;
   let ccPage = '';
   let ccChoiceHere = null;
-  let ccSwallowUntil = 0;
 
   /** The language Protokol sets: Ukrainian; another one in test runs only */
   function ccTarget() {
@@ -707,40 +820,6 @@
       && (el.matches('[role="option"], [role="menuitemradio"], [role="menuitem"], [role="radio"]') || !!el.closest(CC_LIST)), null);
   }
 
-  function ccStyle() {
-    if (document.getElementById('protokol-out-of-sight')) return;
-    const s = document.createElement('style');
-    s.id = 'protokol-out-of-sight';
-    s.textContent = `[${CC_OUT}]{position:fixed!important;left:-30000px!important;top:0!important;width:900px!important;opacity:0!important;pointer-events:none!important;}`;
-    (document.head || document.documentElement).appendChild(s);
-  }
-
-  function ccHidden() {
-    return !!(captionRegion && captionRegion.isConnected && captionRegion.closest(`[${CC_OUT}]`));
-  }
-
-  // The captions with their bar: the highest block around them that holds no
-  // participant tile and none of Meet's buttons below the call, and is low
-  function ccHide() {
-    if (!captionRegion || !captionRegion.isConnected || ccHidden()) return;
-    ccReveal();
-    ccStyle();
-    const high = (window.innerHeight || 800) * 0.45;
-    const button = captionsButton();
-    let el = captionRegion;
-    for (let up = el.parentElement; up && up !== document.body && up !== document.documentElement; up = up.parentElement) {
-      if (up.querySelector('[data-participant-id], [data-is-muted]') || (button && up.contains(button))) break;
-      if (up.getBoundingClientRect().height > high) break;
-      el = up;
-    }
-    el.setAttribute(CC_OUT, '');
-    note(`captions out of sight (${el.tagName.toLowerCase()}, ${el === captionRegion ? 'region' : 'block'})`);
-  }
-
-  function ccReveal() {
-    for (const el of document.querySelectorAll(`[${CC_OUT}]`)) el.removeAttribute(CC_OUT);
-  }
-
   // Meet's own shortcut, as a key press on the page
   function ccKey() {
     for (const type of ['keydown', 'keyup']) {
@@ -763,24 +842,15 @@
       if (out.length >= 14) break;
       if (el.closest('[data-participant-id]') || !el.getClientRects().length) continue;
       const near = captionRegion && captionRegion.parentElement && captionRegion.parentElement.contains(el);
-      if (!near && !el.closest(`${CC_LIST}, [role="dialog"], [${CC_OUT}]`)) continue;
+      if (!near && !el.closest(`${CC_LIST}, [role="dialog"]`)) continue;
       const role = el.getAttribute('role') || el.tagName.toLowerCase();
       out.push(`${role} «${plainText(el).slice(0, 40)}» value=${el.getAttribute('data-value') || ''} checked=${el.getAttribute('aria-checked') || ''}`);
     }
     note(`captions dump ${why}: ${out.join(' | ').slice(0, 900)}`);
   }
 
-  // The person reaches for captions: while Protokol keeps them out of sight,
-  // the press shows them instead of turning them off; either way, from now
-  // on they are the person's
-  function ccIntent(e) {
-    if (captionsOn() === true && ccHidden()) {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      ccSwallowUntil = Date.now() + 1500;
-      ccReveal();
-      note('captions shown to the person');
-    }
+  // The person reaches for captions: from now on they are the person's
+  function ccIntent() {
     if (ccChoice() !== 'person') setCcChoice('person');
   }
 
@@ -792,22 +862,13 @@
 
   try {
     document.addEventListener('pointerdown', (e) => {
-      if (e.isTrusted && ccOnButton(e.target)) ccIntent(e);
+      if (e.isTrusted && ccOnButton(e.target)) ccIntent();
     }, true);
-    // The rest of the same press must not reach Meet either
-    for (const type of ['pointerup', 'mousedown', 'mouseup', 'click']) {
-      document.addEventListener(type, (e) => {
-        if (e.isTrusted && Date.now() < ccSwallowUntil && ccOnButton(e.target)) {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-        }
-      }, true);
-    }
     document.addEventListener('keydown', (e) => {
       if (!e.isTrusted || e.metaKey || e.ctrlKey || e.altKey) return;
       const shortcut = e.code === 'KeyC' && !editable(e.target);
       const press = (e.key === 'Enter' || e.key === ' ') && ccOnButton(e.target);
-      if (shortcut || press) ccIntent(e);
+      if (shortcut || press) ccIntent();
     }, true);
   } catch (e) {
     note(`captions listeners: ${e && e.message}`);
@@ -850,16 +911,14 @@
     }
     if (!(tileCount > 0)) { ccState = 'not in call'; return; }
     if (ccChoice() === 'person') {
-      if (ccHidden()) ccReveal();
       ccState = 'person';
       return;
     }
     const on = captionsOn();
     if (on === true) {
       if (!captionRegion || !captionRegion.isConnected) captionWatch();
-      ccHide();
       ccLangTick();
-      ccState = ccHidden() ? 'on, out of sight' : 'on';
+      ccState = 'on';
       return;
     }
     const b = captionsButton();
@@ -921,7 +980,10 @@
     const out = [];
     for (const s of streams.values()) {
       const levels = s.levels.splice(0, s.levels.length);
-      out.push({ i: s.index, id: s.id, tag: s.tag, since: s.since, ended: s.ended, levels });
+      const entry = { i: s.index, id: s.id, tag: s.tag, since: s.since, ended: s.ended, levels };
+      // TEST BUILDS ONLY: the CSRCs speaking on this stream, one array per level frame
+      if (SLOTS) entry.src = s.src.splice(0, s.src.length);
+      out.push(entry);
     }
     const snap = {
       v: VERSION,
@@ -953,10 +1015,9 @@
       cc: captionsOn(),
       // Caption texts that appeared or changed since the last report
       captions: captionOut.splice(0, captionOut.length),
-      // What Protokol does with the captions: 'on, out of sight', 'on' (could
-      // not be hidden), 'person' (left to the person), 'turning on', 'not
-      // turned on', 'no button', 'state unknown', 'not in call'; and their
-      // language as Meet shows it
+      // What Protokol does with the captions: 'on', 'person' (left to the
+      // person), 'turning on', 'not turned on', 'no button', 'state unknown',
+      // 'not in call'; and their language as Meet shows it
       ccAuto: ccState,
       ccLang,
       lit: frames,
@@ -965,11 +1026,14 @@
       classChanges,
       errors: errors.splice(0, errors.length),
     };
+    if (SLOTS || recording) snap.slots = slotOut();
+    else if (STREAMS) slotTrim();
     classChanges = [];
     pageChanges = 0;
     const ipc = window.__TAURI_INTERNALS__;
     if (!ipc || typeof ipc.invoke !== 'function') return;
     ipc.invoke('plugin:meetprobe|push', { report: snap })
+      .then((state) => { recording = !!state && state.rec === 'on'; })
       .catch((e) => { note(`push: ${String(e && (e.message || e)).slice(0, 120)}`); });
   }
 

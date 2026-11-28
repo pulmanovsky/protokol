@@ -2,7 +2,7 @@
 //!
 //! Ignored by default. Run with:
 //!   PROTOKOL_EVAL_AUDIO=/path/meeting.m4a PROTOKOL_EVAL_OUT=/path/out \
-//!   PROTOKOL_EVAL_STAGE=asr|protocol|all|export|replay|rescore|reference \
+//!   PROTOKOL_EVAL_STAGE=asr|protocol|all|export|replay|rescore|reference|streams \
 //!   PROTOKOL_LLAMA_HELPER=/path/llama-helper \
 //!   cargo test --release --features coreml --lib eval_pipeline -- --ignored --nocapture
 //!
@@ -640,6 +640,10 @@ async fn run_export() {
 /// Then measures it (see `run_rescore`). PROTOKOL_EVAL_TAG names the run
 /// (default «whisper», «both» with Parakeet), PROTOKOL_EVAL_WHISPER the
 /// model, PROTOKOL_EVAL_LIMIT caps the pieces per meeting (a quick look).
+/// PROTOKOL_EVAL_BOOST=«start,cont» favours listed words while Whisper
+/// decodes (`whisper_engine::boost`): the words of
+/// PROTOKOL_EVAL_BOOST_DIR/<meeting>.txt, one a line (a list made without
+/// that meeting), or the dictionary when no folder is named.
 async fn run_replay() {
     let root = out_dir();
     let with_parakeet = std::env::var("PROTOKOL_EVAL_PARAKEET").is_ok_and(|v| v == "1");
@@ -663,6 +667,7 @@ async fn run_replay() {
     let mut out = String::new();
     for dir in dirs {
         let meeting = dir.file_name().unwrap().to_string_lossy().to_string();
+        let boost = eval_boost(&meeting, &terms);
         let mut count = 0;
         for line in std::fs::read_to_string(dir.join("pieces.jsonl")).unwrap().lines().take(limit) {
             let v: serde_json::Value = serde_json::from_str(line).unwrap();
@@ -670,7 +675,10 @@ async fn run_replay() {
             let samples = crate::quality::wav::read(&dir.join(file)).unwrap();
             let seconds = samples.len() as f64 / 16_000.0;
             let mut record = serde_json::json!({ "meeting": meeting, "file": file, "seconds": seconds, "right": text });
-            hear(&engine, parakeet.as_ref(), judge.as_mut(), &terms, &samples, &mut record).await;
+            match &boost {
+                Some(b) => crate::whisper_engine::boost::BOOST.scope(b.clone(), hear(&engine, parakeet.as_ref(), judge.as_mut(), &terms, &samples, &mut record)).await,
+                None => hear(&engine, parakeet.as_ref(), judge.as_mut(), &terms, &samples, &mut record).await,
+            }
             out.push_str(&record.to_string());
             out.push('\n');
             count += 1;
@@ -680,6 +688,24 @@ async fn run_replay() {
     std::fs::write(root.join(format!("replay-{tag}.jsonl")), out).unwrap();
     log_timing(&format!("replay «{tag}» in {:.0} s", started.elapsed().as_secs_f64()));
     rescore(&root, &tag);
+}
+
+/// The words favoured while `meeting` is replayed (PROTOKOL_EVAL_BOOST, see
+/// `run_replay`); None when the run has no boost
+fn eval_boost(meeting: &str, terms: &[String]) -> Option<std::sync::Arc<crate::whisper_engine::boost::Boost>> {
+    let strengths = std::env::var("PROTOKOL_EVAL_BOOST").ok()?;
+    let mut parts = strengths.split(',').map(|v| v.trim().parse::<f32>().expect("PROTOKOL_EVAL_BOOST: start,cont"));
+    let (start, cont) = (parts.next().expect("PROTOKOL_EVAL_BOOST: start,cont"), parts.next().expect("PROTOKOL_EVAL_BOOST: start,cont"));
+    let words: Vec<String> = match std::env::var("PROTOKOL_EVAL_BOOST_DIR") {
+        Ok(dir) => {
+            let file = std::path::Path::new(&dir).join(format!("{meeting}.txt"));
+            let text = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+            text.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+        }
+        Err(_) => terms.to_vec(),
+    };
+    log_timing(&format!("boost for {meeting}: {} words, start {start}, cont {cont}", words.len()));
+    Some(std::sync::Arc::new(crate::whisper_engine::boost::Boost::new(words, start, cont)))
 }
 
 /// What the learned corrections («wrong => right», applied everywhere after
@@ -1306,6 +1332,138 @@ fn rescore(root: &std::path::Path, tag: &str) {
     std::fs::write(root.join(format!("metrics-{tag}.json")), serde_json::to_string_pretty(&json).unwrap()).unwrap();
 }
 
+/// A recorded Meet call heard stream by stream, as «Спікери» does it when the
+/// call's separate streams were kept. PROTOKOL_EVAL_FOLDER: the recording's
+/// folder (metadata.json, the mix, system.m4a, channels.json);
+/// PROTOKOL_EVAL_SESSIONS: the folder with the Meet window's reports and
+/// their `<report>.slots` (not needed when the recording's folder keeps its
+/// own copy, which this run also writes: meet.json, meet-streams.json);
+/// PROTOKOL_EMB_MODEL; PROTOKOL_EVAL_WHISPER for a model other than the
+/// default. Writes rows.json (speaker, start_ms, end_ms, text; the call
+/// recording's clock), transcript.txt, plan.json (every piece: its stream,
+/// its place there and on the recording, its speaker, `by_tiles` = whose it
+/// was before its voice moved it, `voice` = how much it sounds like each
+/// speaker) and words.json; times and counts in timings.txt.
+async fn run_streams() {
+    let folder = PathBuf::from(std::env::var("PROTOKOL_EVAL_FOLDER").expect("PROTOKOL_EVAL_FOLDER"));
+    let emb_model = PathBuf::from(std::env::var("PROTOKOL_EMB_MODEL").expect("PROTOKOL_EMB_MODEL"));
+    if let Ok(dir) = std::env::var("PROTOKOL_EVAL_SESSIONS") {
+        crate::meet::frames::set_sessions_dirs(vec![PathBuf::from(dir)]);
+    }
+    let data_dir = app_data_dir();
+    init_eval_glossary(&data_dir);
+    let audio = crate::audio::retranscription::find_audio_file(&folder).expect("the recording's sound");
+    let mixed = crate::speakers::commands::decode_16k(&audio).expect("decode the mix");
+    let system = crate::speakers::commands::decode_16k(&folder.join(crate::audio::channel_track::SYSTEM_AUDIO_FILE)).expect("decode the call recording");
+    let levels = crate::audio::channel_track::load_levels(&folder);
+    let duration_s = system.len() as f64 / 16_000.0;
+
+    let started = Instant::now();
+    let call = crate::speakers::commands::stream_call(&folder, &system, levels.as_ref(), &emb_model).expect("no streams for this recording, or they do not fit its sound");
+    let plan_s = started.elapsed().as_secs_f64();
+    let plan = &call.plan;
+    let speech = plan.speech_s();
+    let named = plan.names.iter().flatten().count();
+    log_timing(&format!(
+        "streams: {} stream(s), {} speaker(s) ({named} named by Meet), {} piece(s), {:.0} s of speech in {:.0} s of call; clock shift {} frame(s), correlation {:.2}; named by packets {}; sound on no stream {:.1}%; plan and voices {plan_s:.1}s",
+        call.streams.sound.len(),
+        plan.names.len(),
+        plan.pieces.len(),
+        speech.iter().sum::<f64>(),
+        duration_s,
+        plan.clock.shift,
+        plan.clock.corr,
+        plan.by_packets,
+        100.0 * plan.uncovered,
+    ));
+    // How much each piece sounds like every speaker (its first 8 s; pieces of
+    // a second and longer), to judge the voice rules against the truth
+    let mut embedder = crate::speakers::embedding::Embedder::open(&emb_model).ok();
+    let pieces_json: Vec<serde_json::Value> = plan
+        .pieces
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let (start, end) = plan.span(p);
+            let part = crate::speakers::slots::Piece { to: p.to.min(p.from + 8 * 16_000), ..p.clone() };
+            let voice: serde_json::Map<String, serde_json::Value> = match embedder.as_mut().filter(|_| p.to - p.from >= 16_000).and_then(|e| e.embed(&crate::speakers::slots::sound_of(&call.streams, &part)).ok().flatten()) {
+                Some(e) => (0..plan.names.len())
+                    .filter(|k| call.voices.get(*k).is_some_and(|v| v.iter().any(|x| *x != 0.0)))
+                    .map(|k| (plan.key(k), serde_json::json!((crate::speakers::embedding::cosine(&e, &call.voices[k]) * 1000.0).round() / 1000.0)))
+                    .collect(),
+                None => serde_json::Map::new(),
+            };
+            serde_json::json!({
+                "stream": p.stream,
+                "from_s": p.from as f64 / 16_000.0,
+                "to_s": p.to as f64 / 16_000.0,
+                "start_ms": (start * 1000.0).round(),
+                "end_ms": (end * 1000.0).round(),
+                "speaker": plan.key(p.speaker),
+                "by_tiles": plan.by_voice.iter().find(|x| x.0 == i).map(|x| x.1.clone()),
+                "voice": voice,
+            })
+        })
+        .collect();
+    let plan_json = serde_json::json!({
+        "speakers": (0..plan.names.len()).map(|k| serde_json::json!({"key": plan.key(k), "named": plan.names[k].is_some(), "speech_s": speech[k]})).collect::<Vec<_>>(),
+        "self": plan.self_name,
+        "t0_ms": call.streams.t0,
+        "shift_frames": plan.clock.shift,
+        "correlation": plan.clock.corr,
+        "by_packets": plan.by_packets,
+        "by_voice": plan.by_voice.len(),
+        "uncovered": plan.uncovered,
+        "pieces": pieces_json,
+    });
+    std::fs::write(out_dir().join("plan.json"), serde_json::to_string_pretty(&plan_json).unwrap()).unwrap();
+    if std::env::var("PROTOKOL_STREAMS_NO_ASR").is_ok() {
+        return;
+    }
+
+    let model = std::env::var("PROTOKOL_EVAL_WHISPER").unwrap_or_else(|_| crate::config::DEFAULT_WHISPER_MODEL.to_string());
+    let engine = crate::whisper_engine::WhisperEngine::new_with_models_dir(Some(whisper_models_dir(&data_dir))).expect("engine");
+    engine.discover_models().await.expect("discover");
+    engine.load_model(&model).await.expect("load model");
+    let asr_started = Instant::now();
+    let segments = call.segments(&mixed, levels.as_ref());
+    let mut pieces: Vec<crate::speakers::words::PieceWords> = Vec::new();
+    // As in the app: the last text heard from each speaker
+    let mut previous: std::collections::HashMap<Option<String>, String> = std::collections::HashMap::new();
+    let mut heard_s = 0.0;
+    for (seg, _, who) in &segments {
+        heard_s += seg.samples.len() as f64 / 16_000.0;
+        let Some(mut piece) =
+            crate::speakers::words::transcribe_piece(&engine, &seg.samples, seg.start_timestamp_ms / 1000.0, seg.end_timestamp_ms / 1000.0, Some("uk".into()))
+                .await
+                .expect("words")
+        else {
+            continue;
+        };
+        if crate::ukrainian::hallucination::is_repeated_segment(previous.get(who).map(|t| t.as_str()), &piece.text) {
+            continue;
+        }
+        previous.insert(who.clone(), piece.text.clone());
+        piece.who = who.clone();
+        pieces.push(piece);
+    }
+    let asr_s = asr_started.elapsed().as_secs_f64();
+    let rows = crate::speakers::words::rows_by_piece(&pieces, &|p| call.speaker_of(p));
+    let who = |k: usize| if k == crate::speakers::timeline::ME { "Я".to_string() } else { plan.key(k) };
+    let rows_json: Vec<serde_json::Value> =
+        rows.iter().map(|(text, a, b, k)| serde_json::json!({"speaker": who(*k), "start_ms": (a * 1000.0).round(), "end_ms": (b * 1000.0).round(), "text": text})).collect();
+    std::fs::write(out_dir().join("rows.json"), serde_json::to_string_pretty(&rows_json).unwrap()).unwrap();
+    let transcript: String = rows.iter().map(|(text, a, _, k)| format!("[{}] {}: {}\n", hms(a * 1000.0), who(*k), text)).collect();
+    std::fs::write(out_dir().join("transcript.txt"), transcript).unwrap();
+    crate::speakers::words::save(&out_dir(), &pieces).unwrap();
+    log_timing(&format!(
+        "streams: ASR with word times {asr_s:.1}s for {heard_s:.0} s of sound in {} piece(s) ({} kept), {} row(s); model {model}",
+        segments.len(),
+        pieces.len(),
+        rows.len()
+    ));
+}
+
 #[tokio::test]
 #[ignore = "needs a real recording and downloaded models"]
 async fn eval_real_recording() {
@@ -1340,6 +1498,9 @@ async fn eval_real_recording() {
     }
     if stage == "words" {
         run_words().await;
+    }
+    if stage == "streams" {
+        run_streams().await;
     }
     if stage == "learn" {
         run_learn();

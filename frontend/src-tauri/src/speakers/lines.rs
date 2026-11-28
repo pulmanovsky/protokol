@@ -39,45 +39,72 @@ pub(crate) fn words_of_line(pieces: &[super::words::PieceWords], text: &str, sta
         return (false, Vec::new());
     }
     let norm = |w: &str| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
-    // Recognised words heard around the line (with some slack: a cut or an
-    // edit may have moved its edges a little)
-    let mut heard: Vec<(String, f64, f32)> = Vec::new();
-    for p in pieces {
-        // Found by the line's own timeline (words aligned to the sound later
-        // may be seconds away from it)
-        let times: Vec<f64> = if p.heard.is_empty() { retimed(p) } else { p.words.iter().map(|w| p.line_time(w.1)).collect() };
-        for (i, (w, _)) in p.words.iter().enumerate() {
-            let t = times[i];
-            if t >= start - 0.6 && t < end + 0.3 {
-                heard.push((norm(w), t, p.probs.get(i).copied().unwrap_or(1.0)));
-            }
-        }
-    }
-    heard.sort_by(|a, b| a.1.total_cmp(&b.1));
-    // The line's words matched to the heard ones in order (longest common
-    // run): the same word, or one corrected to something that sounds alike
     let line: Vec<String> = words.iter().map(|w| norm(w)).collect();
     let alike = |a: &str, b: &str| a == b || (!a.is_empty() && !b.is_empty() && crate::ukrainian::doubt::sound_similarity(a, b) >= 0.7);
-    let (n, m) = (line.len(), heard.len());
-    let mut dp = vec![vec![0u16; m + 1]; n + 1];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            dp[i][j] = if alike(&line[i], &heard[j].0) { dp[i + 1][j + 1] + 1 } else { dp[i + 1][j].max(dp[i][j + 1]) };
+    let n = line.len();
+    // The line's words matched to the words heard around it, among the
+    // pieces `of` lets in
+    let matched_in = |of: &dyn Fn(&super::words::PieceWords) -> bool| -> Vec<Option<(f64, f32)>> {
+        // Recognised words heard around the line (with some slack: a cut or an
+        // edit may have moved its edges a little)
+        let mut heard: Vec<(String, f64, f32)> = Vec::new();
+        for p in pieces.iter().filter(|p| of(p)) {
+            // Found by the line's own timeline (words aligned to the sound later
+            // may be seconds away from it)
+            let times: Vec<f64> = if p.heard.is_empty() { retimed(p) } else { p.words.iter().map(|w| p.line_time(w.1)).collect() };
+            for (i, (w, _)) in p.words.iter().enumerate() {
+                let t = times[i];
+                if t >= start - 0.6 && t < end + 0.3 {
+                    heard.push((norm(w), t, p.probs.get(i).copied().unwrap_or(1.0)));
+                }
+            }
+        }
+        heard.sort_by(|a, b| a.1.total_cmp(&b.1));
+        // In order (longest common run): the same word, or one corrected to
+        // something that sounds alike
+        let m = heard.len();
+        let mut dp = vec![vec![0u16; m + 1]; n + 1];
+        for i in (0..n).rev() {
+            for j in (0..m).rev() {
+                dp[i][j] = if alike(&line[i], &heard[j].0) { dp[i + 1][j + 1] + 1 } else { dp[i + 1][j].max(dp[i][j + 1]) };
+            }
+        }
+        let mut matched: Vec<Option<(f64, f32)>> = vec![None; n];
+        let (mut i, mut j) = (0, 0);
+        while i < n && j < m {
+            if alike(&line[i], &heard[j].0) && dp[i][j] == dp[i + 1][j + 1] + 1 {
+                matched[i] = Some((heard[j].1.clamp(start - 0.6, end), heard[j].2));
+                i += 1;
+                j += 1;
+            } else if dp[i + 1][j] >= dp[i][j + 1] {
+                i += 1;
+            } else {
+                j += 1;
+            }
+        }
+        matched
+    };
+    // A call heard stream by stream: people talk at the same moments, each in
+    // pieces of their own; the line is the words of one of them (the one
+    // whose pieces hold most of it), never a mix of two people's words
+    let mut speakers: Vec<Option<&str>> = Vec::new();
+    for p in pieces {
+        if p.end >= start - 0.6 && p.start < end + 0.3 && !speakers.contains(&p.who.as_deref()) {
+            speakers.push(p.who.as_deref());
         }
     }
-    let mut matched: Vec<Option<(f64, f32)>> = vec![None; n];
-    let (mut i, mut j) = (0, 0);
-    while i < n && j < m {
-        if alike(&line[i], &heard[j].0) && dp[i][j] == dp[i + 1][j + 1] + 1 {
-            matched[i] = Some((heard[j].1.clamp(start - 0.6, end), heard[j].2));
-            i += 1;
-            j += 1;
-        } else if dp[i + 1][j] >= dp[i][j + 1] {
-            i += 1;
-        } else {
-            j += 1;
+    let matched = if speakers.len() <= 1 {
+        matched_in(&|_| true)
+    } else {
+        let mut best: Vec<Option<(f64, f32)>> = vec![None; n];
+        for who in speakers {
+            let m = matched_in(&|p| p.who.as_deref() == who);
+            if m.iter().flatten().count() > best.iter().flatten().count() {
+                best = m;
+            }
         }
-    }
+        best
+    };
     let found = matched.iter().filter(|x| x.is_some()).count();
     // Words not heard as such (typed in by hand): between their neighbours, by length
     let mut starts: Vec<(f64, f32)> = vec![(start, 1.0); n];
@@ -203,7 +230,7 @@ async fn rows_of(pool: &SqlitePool, meeting_id: &str) -> Result<Vec<Row>> {
     Ok(rows.into_iter().map(|(id, t, a, b, s)| (id, t, a.unwrap_or(0.0), b.or(a).unwrap_or(0.0), s)).collect())
 }
 
-async fn folder_of(pool: &SqlitePool, meeting_id: &str) -> Option<std::path::PathBuf> {
+pub(crate) async fn folder_of(pool: &SqlitePool, meeting_id: &str) -> Option<std::path::PathBuf> {
     sqlx::query_scalar::<_, Option<String>>("SELECT folder_path FROM meetings WHERE id = ?")
         .bind(meeting_id)
         .fetch_optional(pool)
@@ -566,6 +593,14 @@ pub(crate) fn sentence_chunks(words: &[WordTime]) -> Vec<(usize, usize)> {
 /// Places to check who spoke: stretches inside a line that sound like
 /// someone else, and whole lines that sound like another named person
 pub async fn voice_changes(pool: &SqlitePool, models: &std::path::Path, meeting_id: &str) -> Result<Vec<VoiceDoubt>> {
+    // A call heard stream by stream: every line's speaker is the one of its
+    // own stream, and the mixed recording these checks listen to has other
+    // people talking over the line
+    if let Some(folder) = folder_of(pool, meeting_id).await {
+        if super::words::load(&folder).is_some_and(|w| w.iter().any(|p| p.who.is_some())) {
+            return Ok(Vec::new());
+        }
+    }
     let mut found = stretch_changes(pool, models, meeting_id).await?;
     match whole_line_changes(pool, models, meeting_id).await {
         Ok(lines) => {
@@ -1000,6 +1035,7 @@ mod tests {
             aligned: true,
             heard: vec![(8.1, 10.0), (8.6, 10.6), (11.2, 13.0), (11.6, 13.5)],
             bars: None,
+            who: None,
         }];
         let (exact, w) = words_of_line(&pieces, "Склад готовий", 13.0, 16.0);
         assert!(exact);
@@ -1012,6 +1048,29 @@ mod tests {
     }
 
     #[test]
+    fn a_line_takes_its_words_from_its_own_speaker_when_two_talk_at_once() {
+        let piece = |who: &str, start: f64, words: &[(&str, f64)]| PieceWords {
+            text: words.iter().map(|w| w.0).collect::<Vec<_>>().join(" "),
+            start,
+            end: start + 3.0,
+            words: words.iter().map(|(w, t)| (w.to_string(), *t)).collect(),
+            probs: vec![0.9; words.len()],
+            auto: vec![], aligned: false, heard: vec![], bars: None, who: Some(who.to_string()),
+        };
+        // Two streams at the same moments, both starting with the same word
+        let pieces = vec![
+            piece("А", 10.0, &[("Так,", 10.0), ("план", 10.5), ("на", 11.0), ("тиждень", 11.3), ("готовий.", 12.0)]),
+            piece("Б", 10.2, &[("Так,", 10.2), ("я", 10.7), ("згоден.", 11.1)]),
+        ];
+        let (exact, w) = words_of_line(&pieces, "Так, я згоден.", 10.2, 11.8);
+        assert!(exact);
+        assert_eq!((w[0].start, w[1].start, w[2].start), (10.2, 10.7, 11.1));
+        let (exact, w) = words_of_line(&pieces, "Так, план на тиждень готовий.", 10.0, 13.0);
+        assert!(exact);
+        assert_eq!((w[0].start, w[1].start, w[4].start), (10.0, 10.5, 12.0));
+    }
+
+    #[test]
     fn words_get_times_from_recognition_or_by_length() {
         let pieces = vec![PieceWords {
             text: "Добрий день. Склад готовий".into(),
@@ -1019,7 +1078,7 @@ mod tests {
             end: 14.0,
             words: vec![("Добрий".into(), 10.0), ("день.".into(), 10.6), ("Склад".into(), 12.0), ("готовий".into(), 12.5)],
             probs: vec![0.99, 0.9, 0.5, 0.97],
-            auto: vec![], aligned: false, heard: vec![], bars: None,
+            auto: vec![], aligned: false, heard: vec![], bars: None, who: None,
         }];
         // A line with the last two words: exact times and certainty
         let (exact, w) = words_of_line(&pieces, "Склад готовий", 12.0, 14.0);
@@ -1110,7 +1169,7 @@ mod tests {
             end: 6.0,
             words: w(&[("Доброго", 0.2), ("ранку", 0.9), ("отримали", 1.6), ("дванадцять", 1.6), ("генераторів", 1.62), ("на", 3.4), ("склад", 6.0), ("сьогодні", 6.0)]),
             probs: vec![],
-            auto: vec![], aligned: false, heard: vec![], bars: None,
+            auto: vec![], aligned: false, heard: vec![], bars: None, who: None,
         };
         let t = retimed(&p);
         // Three words at one moment are spread up to the next one (3.4)
@@ -1126,7 +1185,7 @@ mod tests {
             end: 20.0,
             words: w(&[("перше", 10.2), ("друге", 11.0), ("третє", 24.0), ("четверте", 29.0), ("п'яте", 34.5)]),
             probs: vec![],
-            auto: vec![], aligned: false, heard: vec![], bars: None,
+            auto: vec![], aligned: false, heard: vec![], bars: None, who: None,
         };
         let t = retimed(&p);
         assert!(t.iter().all(|x| (10.0..=20.0).contains(x)), "{t:?}");

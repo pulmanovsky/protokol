@@ -1,8 +1,8 @@
 //! Google Meet's own captions as a second text of the call.
 //!
 //! In Protokol's Meet window capture.js turns Meet's captions on by itself,
-//! in Ukrainian and out of sight (unless the person turns them on or off
-//! themselves), reads them off the page (who, what, when first and last seen)
+//! in Ukrainian and leaves them on the screen (unless the person turns them
+//! off themselves), reads them off the page (who, what, when first and last seen)
 //! and they come with its reports. Meet keeps rewriting a caption while the person speaks, so only
 //! the last version of each is kept. They are Google's recognition, made
 //! during the call; Protokol only compares its own transcript with them:

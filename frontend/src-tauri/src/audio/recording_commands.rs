@@ -1052,6 +1052,9 @@ pub async fn pause_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), String
     let manager_guard = RECORDING_MANAGER.lock().unwrap();
     if let Some(manager) = manager_guard.as_ref() {
         manager.pause_recording().map_err(|e| e.to_string())?;
+        // What is kept beside the recording by the wall clock (a Meet call's
+        // tiles and streams) leaves this pause out, as the sound does
+        super::pauses::paused();
 
         // Emit pause event to frontend
         app.emit(
@@ -1086,6 +1089,7 @@ pub async fn resume_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), Strin
     let manager_guard = RECORDING_MANAGER.lock().unwrap();
     if let Some(manager) = manager_guard.as_ref() {
         manager.resume_recording().map_err(|e| e.to_string())?;
+        super::pauses::resumed();
 
         // Emit resume event to frontend
         app.emit(

@@ -1,7 +1,8 @@
 //! The app's journal: what the app did and in what state, never what was said.
 //!
 //! - Terminal: every line from info up, as before.
-//! - Files: `~/Library/Logs/ua.protokol.app/protokol-<day>.log`, one per day
+//! - Files: `~/Library/Logs/<the running app's identifier>/protokol-<day>.log`
+//!   (`ua.protokol.app`; a test build its own), one per day
 //!   (UTC, as the times in the lines), kept [`KEEP_DAYS`] days and 50 MB in
 //!   all. After 20 MB a day's file takes only warnings and errors.
 //! - Lines that could hold what was said in a meeting (recognised text from
@@ -232,7 +233,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// `~/Library/Logs/ua.protokol.app`
 pub fn log_dir() -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join("Library/Logs").join(crate::identity::IDENTIFIER))
+    Some(dirs::home_dir()?.join("Library/Logs").join(crate::identity::running()))
 }
 
 fn day_name(date: &str) -> String {
@@ -789,7 +790,7 @@ fn crash_report_since(since: std::time::SystemTime) -> bool {
             return false;
         }
         let head = fs::read_to_string(e.path()).ok().and_then(|t| t.lines().next().map(str::to_string)).unwrap_or_default();
-        head.contains(&format!("\"bundleID\":\"{}\"", crate::identity::IDENTIFIER)) || head.contains(&format!("\"bundleID\" : \"{}\"", crate::identity::IDENTIFIER))
+        head.contains(&format!("\"bundleID\":\"{}\"", crate::identity::running())) || head.contains(&format!("\"bundleID\" : \"{}\"", crate::identity::running()))
     })
 }
 

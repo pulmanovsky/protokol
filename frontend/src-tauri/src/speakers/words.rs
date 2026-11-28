@@ -40,6 +40,11 @@ pub struct PieceWords {
     /// none for the original model (`ukrainian::doubt::Thresholds`)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bars: Option<crate::ukrainian::doubt::Thresholds>,
+    /// The speaker of the whole piece when it was heard on a Meet stream of
+    /// its own (`speakers::slots`): the participant's name, or «#n» for a
+    /// voice Meet did not name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub who: Option<String>,
 }
 
 impl PieceWords {
@@ -148,7 +153,7 @@ pub async fn transcribe_piece(
         end: end_s,
         words: words.into_iter().map(|(w, t)| (w, start_s + t)).collect(),
         probs,
-        auto: Vec::new(), aligned: false, heard: vec![], bars,
+        auto: Vec::new(), aligned: false, heard: vec![], bars, who: None,
     };
     let (text, words, probs) = engine.transcribe_audio_with_word_probs(samples.to_vec(), language.clone(), None).await?;
     let mut piece = make(text, words, probs);
@@ -376,6 +381,10 @@ pub fn doubts(pieces: &[PieceWords], rows: &[(String, String)], terms: &[String]
         }
     }
     let forms: Vec<String> = flat.iter().map(|f| same_form(&f.0)).collect();
+    // How far before the previous line's end a line may start: a little
+    // (a cut, an edit); more in a call heard stream by stream, where a line
+    // of somebody who spoke over a long remark comes before that remark's end
+    let back = if pieces.iter().any(|p| p.who.is_some()) { 240 } else { 60 };
     let mut out = Vec::new();
     let mut k = 0usize;
     for (id, text) in rows {
@@ -386,7 +395,7 @@ pub fn doubts(pieces: &[PieceWords], rows: &[(String, String)], terms: &[String]
         let n = words.len();
         // Where the line may start: a place where one of its first words is
         // heard, near where the previous line ended (a little before it too)
-        let from = k.saturating_sub(60);
+        let from = k.saturating_sub(back);
         let to = (k + 600).min(flat.len());
         let mut starts: Vec<usize> = Vec::new();
         for s in from..to {
@@ -664,7 +673,24 @@ fn normalised(text: &str) -> String {
 pub fn matches_transcript(pieces: &[PieceWords], transcript: &[String]) -> bool {
     let a = normalised(&pieces.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join(" "));
     let b = normalised(&transcript.join(" "));
-    !a.is_empty() && a == b && pieces.iter().all(|p| p.words.len() == p.text.split_whitespace().count())
+    if a.is_empty() || !pieces.iter().all(|p| p.words.len() == p.text.split_whitespace().count()) {
+        return false;
+    }
+    if a == b {
+        return true;
+    }
+    // A call heard stream by stream: people talk at once, so the lines (by
+    // the moment each starts) and the pieces need not come in one order;
+    // the same words, whatever the order
+    if pieces.iter().any(|p| p.who.is_some()) {
+        let sorted = |t: &str| {
+            let mut w: Vec<&str> = t.split(' ').collect();
+            w.sort_unstable();
+            w.join(" ")
+        };
+        return sorted(&a) == sorted(&b);
+    }
+    false
 }
 
 /// The voice heard at `t`: the turn around it, else the closest turn
@@ -739,6 +765,27 @@ pub fn assign(pieces: &[PieceWords], turns: &[Turn]) -> Vec<(String, f64, f64, u
             last.0.push_str(w);
             last.2 = end;
         }
+    }
+    rows
+}
+
+/// Rows when every piece has one speaker of its own (a call heard stream by
+/// stream): pieces in the order they start, one speaker's pieces in a row
+/// made into rows as [`assign`] does. People who talk at once get rows of
+/// their own, each whole; nothing is split by the moment a word sounds.
+pub fn rows_by_piece(pieces: &[PieceWords], speaker_of: &dyn Fn(&PieceWords) -> usize) -> Vec<(String, f64, f64, usize)> {
+    let mut order: Vec<&PieceWords> = pieces.iter().filter(|p| !p.words.is_empty()).collect();
+    order.sort_by(|a, b| a.start.total_cmp(&b.start));
+    let mut rows: Vec<(String, f64, f64, usize)> = Vec::new();
+    let mut i = 0;
+    while i < order.len() {
+        let speaker = speaker_of(order[i]);
+        let mut group: Vec<PieceWords> = Vec::new();
+        while i < order.len() && speaker_of(order[i]) == speaker {
+            group.push(order[i].clone());
+            i += 1;
+        }
+        rows.extend(assign(&group, &[Turn { start: f64::MIN, end: f64::MAX, speaker }]));
     }
     rows
 }
@@ -838,7 +885,7 @@ mod tests {
             end,
             words: words.iter().map(|(w, t)| (w.to_string(), *t)).collect(),
             probs: Vec::new(),
-            auto: Vec::new(), aligned: false, heard: vec![], bars: None,
+            auto: Vec::new(), aligned: false, heard: vec![], bars: None, who: None,
         }
     }
 
@@ -1032,5 +1079,18 @@ mod tests {
         let pieces = vec![piece(0.0, 2.0, &[("Так", 0.5), ("точно.", 1.0)])];
         assert!(matches_transcript(&pieces, &["Так  точно.".to_string()]));
         assert!(!matches_transcript(&pieces, &["Так, точно.".to_string()]));
+        // Heard stream by stream: the lines of people who talk at once need
+        // not come in the pieces' order, the words are the same
+        let piece = |who: &str, text: &str| PieceWords {
+            text: text.into(),
+            start: 0.0,
+            end: 3.0,
+            words: text.split_whitespace().map(|w| (w.to_string(), 0.0)).collect(),
+            probs: Vec::new(),
+            auto: Vec::new(), aligned: false, heard: vec![], bars: None, who: Some(who.into()),
+        };
+        let pieces = vec![piece("А", "План готовий. Далі склад."), piece("Б", "Так, згоден.")];
+        assert!(matches_transcript(&pieces, &["План готовий.".to_string(), "Так, згоден.".to_string(), "Далі склад.".to_string()]));
+        assert!(!matches_transcript(&pieces, &["План готовий.".to_string(), "Так, згодна.".to_string(), "Далі склад.".to_string()]));
     }
 }

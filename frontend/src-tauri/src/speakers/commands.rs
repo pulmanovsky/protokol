@@ -180,6 +180,78 @@ pub async fn identify_with(
     identify_with_stop(pool, models, engine, language, meeting_id, progress, || false).await
 }
 
+/// A call heard by its separate Meet streams (`slots`)
+pub(crate) struct StreamCall {
+    pub(crate) streams: std::sync::Arc<super::slots::Streams>,
+    pub(crate) plan: super::slots::Plan,
+    pub(crate) voices: Vec<Vec<f32>>,
+}
+
+impl StreamCall {
+    /// The speakers and their turns as diarization would give them
+    fn diarization(&self) -> Diarization {
+        let turns = self
+            .plan
+            .pieces
+            .iter()
+            .map(|p| {
+                let (start, end) = self.plan.span(p);
+                Turn { start, end, speaker: p.speaker }
+            })
+            .collect();
+        Diarization { turns, centroids: self.voices.clone(), speech_s: self.plan.speech_s() }
+    }
+
+    /// What Whisper hears: every piece of every stream with its speaker, on
+    /// the call recording's clock, and the user's own speech from the mix
+    pub(crate) fn segments(&self, mixed: &[f32], levels: Option<&crate::audio::channel_track::ChannelLevels>) -> Vec<(crate::audio::vad::SpeechSegment, bool, Option<String>)> {
+        let mut out: Vec<(crate::audio::vad::SpeechSegment, bool, Option<String>)> = Vec::new();
+        for p in &self.plan.pieces {
+            let samples = super::slots::sound_of(&self.streams, p);
+            if samples.len() < 1600 {
+                continue;
+            }
+            let (start, end) = self.plan.span(p);
+            out.push((crate::audio::vad::SpeechSegment { samples, start_timestamp_ms: start * 1000.0, end_timestamp_ms: end * 1000.0, confidence: 1.0 }, true, Some(self.plan.key(p.speaker))));
+        }
+        if let Some(levels) = levels {
+            out.extend(super::words::own_speech(mixed, &me_turns(levels)).into_iter().map(|s| (s, false, None)));
+        }
+        out.sort_by(|a, b| a.0.start_timestamp_ms.total_cmp(&b.0.start_timestamp_ms));
+        out
+    }
+
+    /// The speaker of a piece: the one kept with its words, the user otherwise
+    pub(crate) fn speaker_of(&self, piece: &super::words::PieceWords) -> usize {
+        piece.who.as_deref().and_then(|k| self.plan.speaker_of(k)).unwrap_or(ME)
+    }
+}
+
+/// The call of a recording by its Meet streams, when they were kept and fit it
+pub(crate) fn stream_call(folder: &Path, system: &[f32], levels: Option<&crate::audio::channel_track::ChannelLevels>, embedding_model: &Path) -> Option<StreamCall> {
+    let secs = system.len() as f64 / 16_000.0;
+    let streams = super::slots::for_recording(folder, secs)?;
+    let call = crate::meet::frames::for_recording(folder, secs)?;
+    let start = crate::meet::frames::recording_start_ms(folder)?;
+    let mut plan = super::slots::plan(&streams, &call, system, levels, start)?;
+    let voices = match super::embedding::Embedder::open(embedding_model) {
+        Ok(mut embedder) => super::slots::voices(&streams, &mut plan, &mut |s| embedder.embed(s).ok().flatten()),
+        Err(e) => {
+            warn!("Meet streams: the speakers' voices not measured: {e}");
+            vec![Vec::new(); plan.names.len()]
+        }
+    };
+    info!("Meet streams: the call is heard stream by stream ({} speaker(s), {} piece(s))", plan.names.len(), plan.pieces.len());
+    Some(StreamCall { streams: std::sync::Arc::new(streams), plan, voices })
+}
+
+/// The call's turns and the user's own, by start (nothing cut from either)
+fn beside(call: &[Turn], me: &[Turn]) -> Vec<Turn> {
+    let mut turns: Vec<Turn> = call.iter().chain(me).cloned().collect();
+    turns.sort_by(|a, b| a.start.total_cmp(&b.start));
+    turns
+}
+
 /// [`identify_with`] that the user can stop: checked between stages, in the
 /// voice stage and before every piece of text; nothing is saved when stopped
 /// (the transcript and the voices are written together at the very end)
@@ -219,43 +291,70 @@ pub async fn identify_with_stop(
         .await??
     };
 
-    // With the channels kept, the call is diarized alone and the microphone is «Я»
     progress("diarizing", 15);
-    let seg_model = models.join(super::commands::SEGMENTATION_MODEL);
-    let emb_model = models.join(EMBEDDING_MODEL);
-    let call_audio = system.clone().unwrap_or_else(|| mixed.clone());
-    // Voices: the slow part before the text; its progress goes 15 → 30 %
-    let (tx, rx) = std::sync::mpsc::channel::<f32>();
     if stop() {
         return Err(anyhow!(super::diarize::STOPPED));
     }
-    let stop_voices = stop.clone();
-    let mut job = tokio::task::spawn_blocking(move || {
-        super::diarize::diarize_cancellable(
-            &call_audio,
-            &seg_model,
-            &emb_model,
-            super::diarize::DEFAULT_CLUSTER_THRESHOLD,
-            &|f| {
-                let _ = tx.send(f);
-            },
-            &stop_voices,
-        )
-    });
-    let mut last = 15;
-    let diarization = loop {
-        tokio::select! {
-            done = &mut job => break done??,
-            _ = tokio::time::sleep(std::time::Duration::from_millis(700)) => {
-                let mut f = None;
-                while let Ok(v) = rx.try_recv() {
-                    f = Some(v);
-                }
-                if let Some(f) = f {
-                    let pct = 15 + (f.clamp(0.0, 1.0) * 15.0) as u32;
-                    if pct > last {
-                        last = pct;
-                        progress("diarizing", pct);
+    // A call whose separate Meet streams were kept is heard stream by stream,
+    // its speakers named by Meet itself (`slots`). Not for a text whose words
+    // came from the mixed recording: nothing is heard again behind the
+    // corrections made in it.
+    let text_from_mix = {
+        let lines: Vec<String> =
+            sqlx::query_scalar("SELECT transcript FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time").bind(meeting_id).fetch_all(&pool).await?;
+        super::words::load(&folder).is_some_and(|w| super::words::matches_transcript(&w, &lines) && w.iter().all(|p| p.who.is_none()))
+    };
+    let by_streams: Option<StreamCall> = match (&system, crate::meet::split_on(&pool).await && !text_from_mix) {
+        (Some(call_sound), true) => {
+            let (dir, sound, lv, emb) = (folder.clone(), call_sound.clone(), levels.clone(), models.join(EMBEDDING_MODEL));
+            tokio::task::spawn_blocking(move || stream_call(&dir, &sound, lv.as_ref(), &emb)).await.ok().flatten()
+        }
+        _ => None,
+    };
+    if by_streams.is_none() {
+        // What the Meet window sent for a recording heard from the mix is
+        // not left as it came
+        let (dir, secs) = (folder.clone(), mixed.len() as f64 / 16_000.0);
+        let _ = tokio::task::spawn_blocking(move || super::slots::settle(&dir, secs)).await;
+    }
+    let diarization = match &by_streams {
+        Some(call) => call.diarization(),
+        None => {
+            // With the channels kept, the call is diarized alone and the microphone is «Я»
+            let seg_model = models.join(super::commands::SEGMENTATION_MODEL);
+            let emb_model = models.join(EMBEDDING_MODEL);
+            let call_audio = system.clone().unwrap_or_else(|| mixed.clone());
+            // Voices: the slow part before the text; its progress goes 15 → 30 %
+            let (tx, rx) = std::sync::mpsc::channel::<f32>();
+            let stop_voices = stop.clone();
+            let mut job = tokio::task::spawn_blocking(move || {
+                super::diarize::diarize_cancellable(
+                    &call_audio,
+                    &seg_model,
+                    &emb_model,
+                    super::diarize::DEFAULT_CLUSTER_THRESHOLD,
+                    &|f| {
+                        let _ = tx.send(f);
+                    },
+                    &stop_voices,
+                )
+            });
+            let mut last = 15;
+            loop {
+                tokio::select! {
+                    done = &mut job => break done??,
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(700)) => {
+                        let mut f = None;
+                        while let Ok(v) = rx.try_recv() {
+                            f = Some(v);
+                        }
+                        if let Some(f) = f {
+                            let pct = 15 + (f.clamp(0.0, 1.0) * 15.0) as u32;
+                            if pct > last {
+                                last = pct;
+                                progress("diarizing", pct);
+                            }
+                        }
                     }
                 }
             }
@@ -269,7 +368,7 @@ pub async fn identify_with_stop(
     // by the participant lit as speaking (nothing changes without its frames)
     let mut meet_names: Vec<Option<String>> = Vec::new();
     let mut meet_shared: Vec<bool> = Vec::new();
-    let diarization = match (&system, crate::meet::split_on(&pool).await) {
+    let diarization = match (&system, by_streams.is_none() && crate::meet::split_on(&pool).await) {
         (Some(call_sound), true) => {
             let (dir, secs) = (folder.clone(), call_sound.len() as f64 / 16_000.0);
             let frames = tokio::task::spawn_blocking(move || crate::meet::frames::for_recording(&dir, secs)).await.ok().flatten();
@@ -322,6 +421,11 @@ pub async fn identify_with_stop(
             diarization
         }
     };
+    if let Some(call) = &by_streams {
+        meet_names = call.plan.names.clone();
+        meet_shared = vec![false; meet_names.len()];
+        super::meet::save_status(&folder, &super::meet::MeetStatus { used: true, accounts: meet_names.iter().flatten().count(), ..Default::default() });
+    }
     let meet_name_of = |k: usize| -> Option<String> { meet_names.get(k).cloned().flatten() };
 
     // The call recording's clock drifts from the mix the player plays: what
@@ -336,6 +440,8 @@ pub async fn identify_with_stop(
         None => None,
     };
     let mut turns: Vec<Turn> = match (&levels, &system) {
+        // Heard stream by stream: the user's own speech takes nothing from the call's
+        (Some(levels), Some(_)) if by_streams.is_some() => beside(&diarization.turns, &me_turns(levels)),
         (Some(levels), Some(_)) => overlay(&diarization.turns, &me_turns(levels)),
         _ => diarization.turns.clone(),
     };
@@ -384,6 +490,16 @@ pub async fn identify_with_stop(
     let current: Vec<String> =
         sqlx::query_scalar("SELECT transcript FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time").bind(meeting_id).fetch_all(&pool).await?;
     let mut kept_words = super::words::load(&folder).filter(|w| super::words::matches_transcript(w, &current));
+    // Words heard stream by stream whose speaker this call does not have (any
+    // more), or whose streams are gone: heard again
+    let strangers = |w: &Vec<super::words::PieceWords>| match &by_streams {
+        Some(call) => w.iter().any(|p| p.who.as_deref().is_some_and(|k| call.plan.speaker_of(k).is_none())),
+        None => w.iter().any(|p| p.who.is_some()),
+    };
+    if kept_words.as_ref().is_some_and(strangers) {
+        info!("Words heard stream by stream no longer fit this call's speakers: heard again");
+        kept_words = None;
+    }
     // An import: its words placed by the sound now, on more threads than the
     // background pass would (nobody is listening yet); any failure keeps them as they are
     if let (Some(words), Some(dir)) = (kept_words.as_mut(), super::aligner::for_processing(&pool, &models).await) {
@@ -415,7 +531,7 @@ pub async fn identify_with_stop(
     }
     // A voice heard where the import has no words: those stretches transcribed on their own
     if let Some(words) = kept_words.as_mut() {
-        if !stop() && !crate::audio::recording_commands::recording_now() {
+        if !stop() && !crate::audio::recording_commands::recording_now() && by_streams.is_none() {
             match super::words::fill_silent_turns(engine, &mixed, words, &turns, language.clone(), &stop).await {
                 Ok(0) => {}
                 Ok(_) => {
@@ -427,7 +543,14 @@ pub async fn identify_with_stop(
             }
         }
     }
-    let word_rows = kept_words.as_ref().map(|w| super::words::assign(w, &turns).into_iter().map(|(t, a, b, k)| (t, a * 1000.0, b * 1000.0, k)).collect::<Vec<_>>());
+    let rows_of = |pieces: &[super::words::PieceWords], turns: &[Turn]| -> Vec<(String, f64, f64, usize)> {
+        let rows = match &by_streams {
+            Some(call) => super::words::rows_by_piece(pieces, &|p| call.speaker_of(p)),
+            None => super::words::assign(pieces, turns),
+        };
+        rows.into_iter().map(|(t, a, b, k)| (t, a * 1000.0, b * 1000.0, k)).collect()
+    };
+    let word_rows = kept_words.as_ref().map(|w| rows_of(w, &turns));
     // Once the lines are made again from these word times, they share one timeline
     let one_timeline = kept_words.filter(|w| w.iter().any(|p| !p.heard.is_empty()));
     if word_rows.is_some() {
@@ -441,26 +564,32 @@ pub async fn identify_with_stop(
         None => {
             progress("transcribing", 30);
             // The call and the user's own speech transcribed apart (recordings)
-            let segments = super::words::channel_pieces_tagged(&mixed, system.as_deref(), levels.as_ref())?;
+            // (the sound, on the call recording's clock, its speaker when heard on a stream of its own)
+            let segments: Vec<(crate::audio::vad::SpeechSegment, bool, Option<String>)> = match &by_streams {
+                Some(call) => call.segments(&mixed, levels.as_ref()),
+                None => super::words::channel_pieces_tagged(&mixed, system.as_deref(), levels.as_ref())?.into_iter().map(|(s, c)| (s, c, None)).collect(),
+            };
             let mut pieces: Vec<super::words::PieceWords> = Vec::new();
             let mut from_call: Vec<bool> = Vec::new();
-            let mut previous: Option<String> = None;
-            for (i, (seg, call)) in segments.iter().enumerate() {
+            // The last text heard from each speaker (the mixed recording is one)
+            let mut previous: std::collections::HashMap<Option<String>, String> = std::collections::HashMap::new();
+            for (i, (seg, call, who)) in segments.iter().enumerate() {
                 if stop() {
                     return Err(anyhow!(super::diarize::STOPPED));
                 }
                 if i % 5 == 0 {
                     progress("transcribing", 30 + (65 * i / segments.len().max(1)) as u32);
                 }
-                let Some(piece) =
+                let Some(mut piece) =
                     super::words::transcribe_piece(engine, &seg.samples, seg.start_timestamp_ms / 1000.0, seg.end_timestamp_ms / 1000.0, language.clone()).await?
                 else {
                     continue;
                 };
-                if crate::ukrainian::hallucination::is_repeated_segment(previous.as_deref(), &piece.text) {
+                if crate::ukrainian::hallucination::is_repeated_segment(previous.get(who).map(|t| t.as_str()), &piece.text) {
                     continue;
                 }
-                previous = Some(piece.text.clone());
+                previous.insert(who.clone(), piece.text.clone());
+                piece.who = who.clone();
                 pieces.push(piece);
                 from_call.push(*call);
             }
@@ -543,13 +672,14 @@ pub async fn identify_with_stop(
                     }
                     let mapped: Vec<Turn> = diarization.turns.iter().map(|t| Turn { start: map.map(t.start), end: map.map(t.end), speaker: t.speaker }).collect();
                     turns = match (&levels, &system) {
+                        (Some(levels), Some(_)) if by_streams.is_some() => beside(&mapped, &me_turns(levels)),
                         (Some(levels), Some(_)) => overlay(&mapped, &me_turns(levels)),
                         _ => mapped,
                     };
                 }
             }
             // A voice heard where Whisper wrote nothing: transcribed on its own
-            if !stop() {
+            if !stop() && by_streams.is_none() {
                 if let Err(e) = super::words::fill_silent_turns(engine, &mixed, &mut pieces, &turns, language.clone(), &stop).await {
                     warn!("Speech without words not transcribed: {e}");
                 }
@@ -557,7 +687,7 @@ pub async fn identify_with_stop(
             if let Err(e) = super::words::save(&folder, &pieces) {
                 warn!("Could not save word times: {e}");
             }
-            super::words::assign(&pieces, &turns).into_iter().map(|(t, a, b, k)| (t, a * 1000.0, b * 1000.0, k)).collect()
+            rows_of(&pieces, &turns)
         }
     };
     if rows.is_empty() {

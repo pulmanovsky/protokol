@@ -26,6 +26,7 @@ pub mod recording_preferences;
 pub mod recording_saver;
 pub mod incremental_saver;
 pub mod player_time;  // The two clocks of a recording joined from chunks
+pub mod pauses;  // When a recording was paused, on the wall clock
 pub mod live_levels;
 pub mod simple_level_monitor;
 pub mod hardware_detector;

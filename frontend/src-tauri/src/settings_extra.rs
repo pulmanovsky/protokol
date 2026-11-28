@@ -192,7 +192,7 @@ pub async fn api_models_reveal<R: Runtime>(app: AppHandle<R>) -> Result<(), Stri
 // ===== Конфіденційність =====
 
 fn log_dir() -> Option<std::path::PathBuf> {
-    Some(dirs::home_dir()?.join("Library/Logs").join(crate::identity::IDENTIFIER))
+    Some(dirs::home_dir()?.join("Library/Logs").join(crate::identity::running()))
 }
 
 /// Shows a folder in Finder. The app's own folders are named after its

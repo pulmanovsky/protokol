@@ -7,7 +7,10 @@
 //! not left out of the document. Consecutive checked
 //! lines are joined into pieces of up to 25 s; a longer line is cut between
 //! its words. A line that is not checked breaks the run, so a piece never
-//! holds text nobody looked at.
+//! holds text nobody looked at. Where two lines sound at once (a call heard
+//! stream by stream keeps people who talk over each other in lines of their
+//! own) the recording holds both voices, so those words are left out and a
+//! piece never runs across them.
 
 use std::collections::HashSet;
 
@@ -25,6 +28,9 @@ const PAD_BEFORE_S: f64 = 0.15;
 const PAD_AFTER_S: f64 = 0.3;
 /// Shorter pieces say too little to measure or learn from (s)
 const MIN_PIECE_S: f64 = 0.5;
+/// A word counts as said over another line when its middle is this far
+/// inside that line (s): lines that only touch at their ends do not count
+const OVER_S: f64 = 0.15;
 
 /// One line of a meeting with its words and where they sound (seconds in
 /// the recording)
@@ -55,6 +61,12 @@ fn is_marker(text: &str) -> bool {
 pub fn pieces_of(lines: &[Line]) -> Vec<Piece> {
     // Each checked line cut into parts that fit (a part: index of its line, words)
     let mut runs: Vec<Vec<(usize, Vec<(String, f64, f64)>)>> = vec![Vec::new()];
+    // Where each line sounds, to find the words another line sounds over
+    let spans: Vec<Option<(f64, f64)>> = lines.iter().map(|l| Some((l.words.first()?.1, l.words.last()?.2))).collect();
+    let talked_over = |k: usize, w: &(String, f64, f64)| {
+        let mid = (w.1 + w.2) / 2.0;
+        spans.iter().enumerate().any(|(j, s)| j != k && s.is_some_and(|(a, b)| mid > a + OVER_S && mid < b - OVER_S))
+    };
     for (k, line) in lines.iter().enumerate() {
         let text: String = line.words.iter().map(|w| w.0.as_str()).collect::<Vec<_>>().join(" ");
         if !line.checked || line.words.is_empty() || is_marker(&text) {
@@ -65,6 +77,15 @@ pub fn pieces_of(lines: &[Line]) -> Vec<Piece> {
         }
         let mut part: Vec<(String, f64, f64)> = Vec::new();
         for w in &line.words {
+            if talked_over(k, w) {
+                if !part.is_empty() {
+                    runs.last_mut().unwrap().push((k, std::mem::take(&mut part)));
+                }
+                if !runs.last().unwrap().is_empty() {
+                    runs.push(Vec::new());
+                }
+                continue;
+            }
             if let Some(first) = part.first() {
                 if w.2 - first.1 > MAX_PIECE_S {
                     runs.last_mut().unwrap().push((k, std::mem::take(&mut part)));
@@ -79,7 +100,7 @@ pub fn pieces_of(lines: &[Line]) -> Vec<Piece> {
     // Where each line's sound begins and ends, to keep padding off the neighbours
     let first_of = |k: usize| lines[k].words.first().map(|w| w.1);
     let last_of = |k: usize| lines[k].words.last().map(|w| w.2);
-    let prev_end = |k: usize| (0..k).rev().find_map(last_of).unwrap_or(0.0);
+    let prev_end = |k: usize| (0..k).filter_map(last_of).fold(0.0, f64::max);
     let next_start = |k: usize| (k + 1..lines.len()).find_map(first_of).unwrap_or(f64::INFINITY);
 
     let mut out = Vec::new();
@@ -185,6 +206,34 @@ mod tests {
         assert!(p[0].end <= 2.0 + 1e-9, "{p:?}");
         assert!(p[1].start >= 2.7 - 1e-9, "{p:?}");
         assert!(!p.iter().any(|x| x.lines.contains(&"b".to_string())));
+    }
+
+    #[test]
+    fn words_two_people_say_at_once_are_left_out_and_never_bridged() {
+        // A long report; a remark said over its middle; the next speaker
+        // starts before the report ends
+        let report: Vec<(String, f64)> = (0..20).map(|i| (format!("звіт{i}"), i as f64)).collect();
+        let refs: Vec<(&str, f64)> = report.iter().map(|(w, t)| (w.as_str(), *t)).collect();
+        let next: Vec<(String, f64)> = (0..6).map(|i| (format!("далі{i}"), 18.0 + i as f64)).collect();
+        let next_refs: Vec<(&str, f64)> = next.iter().map(|(w, t)| (w.as_str(), *t)).collect();
+        let lines = vec![line("a", true, &refs), line("b", true, &[("Так,", 8.0), ("так.", 8.6)]), line("c", true, &next_refs)];
+        let p = pieces_of(&lines);
+        let text: Vec<&str> = p.iter().map(|x| x.text.as_str()).collect();
+        // The remark is gone whole, the report without the words under it
+        // and under the next speaker, the next speaker from where he is alone
+        assert!(!text.iter().any(|t| t.contains("Так") || t.contains("так.")), "{text:?}");
+        assert!(!text.iter().any(|t| t.contains("звіт8 ") || t.contains("звіт18") || t.contains("звіт19") || t.contains("далі0")), "{text:?}");
+        assert!(text.iter().any(|t| t.starts_with("звіт0 ") && t.ends_with("звіт7")), "{text:?}");
+        assert!(text.iter().any(|t| t.starts_with("звіт9 ") && t.ends_with("звіт17")), "{text:?}");
+        assert!(text.iter().any(|t| t.starts_with("далі1 ") && t.ends_with("далі5")), "{text:?}");
+        assert_eq!(p.len(), 3, "{text:?}");
+        // No piece holds sound of the stretches left out
+        let over = [(8.0, 9.0), (18.0, 19.0)];
+        for x in &p {
+            for (a, b) in over {
+                assert!(x.end <= a + 1e-6 || x.start >= b - 1e-6, "{x:?} over {a}–{b}");
+            }
+        }
     }
 
     #[test]

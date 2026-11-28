@@ -194,7 +194,7 @@ fn correlation(a: &[f32], b: &[Option<f32>], off: i64, range: std::ops::Range<us
 }
 
 /// Best offset in `[from, to]` and its correlation
-fn best_offset(a: &[f32], b: &[Option<f32>], from: i64, to: i64, range: std::ops::Range<usize>) -> Option<(i64, f32)> {
+pub(super) fn best_offset(a: &[f32], b: &[Option<f32>], from: i64, to: i64, range: std::ops::Range<usize>) -> Option<(i64, f32)> {
     let mut best: Option<(i64, f32)> = None;
     for off in from..=to {
         let (c, n) = correlation(a, b, off, range.clone());
@@ -262,7 +262,7 @@ fn align(env: &[f32], g: &Grid, start_ms: f64) -> Option<(Offset, f32)> {
 }
 
 /// The participant who is the user: lit while this Mac's microphone speaks
-fn find_self(lit: &[Option<Vec<usize>>], levels: Option<&ChannelLevels>, people: usize) -> Option<usize> {
+pub(super) fn find_self(lit: &[Option<Vec<usize>>], levels: Option<&ChannelLevels>, people: usize) -> Option<usize> {
     let levels = levels?;
     let mut lit_n = vec![0usize; people];
     let mut me_n = vec![0usize; people];

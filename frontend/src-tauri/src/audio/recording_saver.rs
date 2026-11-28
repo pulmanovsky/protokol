@@ -259,6 +259,13 @@ impl RecordingSaver {
         self.write_metadata(&meeting_folder, &metadata)?;
         // The recording's own journal (diagnostics.log) starts here
         crate::logfile::recording_started(&meeting_folder);
+        // Its pauses are kept from here on (`pauses.json` once there is one)
+        super::pauses::recording_started(&meeting_folder);
+        // A Meet call's separate streams go to this recording from now on
+        // (never when the recording's sound is not kept)
+        if create_checkpoints {
+            crate::speakers::slots::recording_started(&meeting_folder);
+        }
 
         self.meeting_folder = Some(meeting_folder);
         self.metadata = Some(metadata);
@@ -359,6 +366,8 @@ impl RecordingSaver {
         info!("Stopping recording saver");
         if let Some(folder) = &self.meeting_folder {
             crate::logfile::recording_stopped(folder);
+            super::pauses::recording_stopped(folder);
+            crate::speakers::slots::recording_stopped(folder);
         }
 
         // Stop accumulation

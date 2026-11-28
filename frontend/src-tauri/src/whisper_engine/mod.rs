@@ -1,5 +1,6 @@
 pub mod whisper_engine;
 pub mod acceleration;
+pub mod boost;
 pub mod commands;
 // pub mod stderr_suppressor;
 

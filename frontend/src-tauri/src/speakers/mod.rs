@@ -22,6 +22,7 @@ pub mod time_map;
 pub mod aligner;
 pub mod meet;
 pub mod meet_names;
+pub mod slots;
 
 use crate::audio::vad::SpeechSegment;
 

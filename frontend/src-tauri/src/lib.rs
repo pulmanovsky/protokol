@@ -551,6 +551,8 @@ pub fn run() {
             audio::live_levels::init(_app.handle().clone());
             island::init(_app.handle());
             meet::live::init(_app.handle());
+            #[cfg(feature = "test-hooks")]
+            meet::test_open_at_start(_app.handle());
             // The main window can be captured (bug screenshots) unless the user
             // chose to hide it; the saved setting is applied by the UI
             island::apply_content_protection(_app.handle(), false);

@@ -42,6 +42,32 @@ pub struct Facts {
     pub edits: Option<(usize, usize, super::corrected::Edits)>,
     /// Meet's captions against the corrections, over the newest checked meetings that have them
     pub captions: Option<super::captions_check::CaptionsCheck>,
+    /// The same newest checked meetings in two groups: Meet calls heard
+    /// stream by stream, and the rest
+    pub streams: Option<(Share, Share)>,
+    /// Of those meetings: recorded in the Meet window, and with Meet's
+    /// separate streams kept
+    pub meet_calls: (usize, usize),
+}
+
+/// Corrections over a group of meetings
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Share {
+    pub meetings: usize,
+    pub words: usize,
+    /// Words corrected (as in «Правки за видами»)
+    pub corrected: usize,
+    /// Lines given to another speaker
+    pub speaker_lines: usize,
+}
+
+impl Share {
+    pub fn add(&mut self, m: &super::corrected::Meeting) {
+        self.meetings += 1;
+        self.words += m.words;
+        self.corrected += m.edits.words();
+        self.speaker_lines += m.edits.speaker_lines;
+    }
 }
 
 /// A number the Ukrainian way: decimal comma
@@ -168,6 +194,25 @@ pub fn lines(f: &Facts) -> Vec<Line> {
         if w > 0 {
             add("repeats", "Повторні правки в тій самій нараді", format!("{} з {} виправлених слів", e.repeats, w));
         }
+    }
+    // Only once such meetings exist, or streams were kept and not used:
+    // how they compare with the rest
+    let (calls, kept) = f.meet_calls;
+    if let Some((by, rest)) = f.streams.filter(|(by, _)| (by.meetings > 0 && by.words > 0) || kept > 0) {
+        let share = |s: &Share| num(100.0 * s.corrected as f64 / s.words.max(1) as f64, 1);
+        let mut value = format!("{} з {}", by.meetings, by.meetings + rest.meetings);
+        if by.meetings > 0 && by.words > 0 {
+            value.push_str(&format!(": правок {}% слів, іншому мовцю {} рядків", share(&by), by.speaker_lines));
+            if rest.meetings > 0 && rest.words > 0 {
+                value.push_str(&format!("; в інших нарадах правок {}% слів, іншому мовцю {} рядків", share(&rest), rest.speaker_lines));
+            }
+        }
+        // A call whose streams were kept and whose text still came from the
+        // mixed recording shows here
+        if calls > 0 || kept > 0 {
+            value.push_str(&format!("; записів із вікна Meet {calls}, окремий звук збережено для {kept}"));
+        }
+        add("streams", "Наради, розпізнані за окремими голосами Meet", value);
     }
     if let Some(c) = f.captions.filter(|c| c.any.covered > 0) {
         let pct = |a: usize, b: usize| num(100.0 * a as f64 / b.max(1) as f64, 0);
@@ -321,6 +366,8 @@ mod tests {
             history: vec![stopped, checked_run()],
             auto_fixes: Some((41, 3)),
             captions: None,
+            streams: Some((Share { meetings: 2, words: 800, corrected: 24, speaker_lines: 1 }, Share { meetings: 3, words: 1200, corrected: 76, speaker_lines: 6 })),
+            meet_calls: (4, 3),
             edits: Some((
                 5,
                 2000,
@@ -340,6 +387,13 @@ mod tests {
         assert_eq!(value("edits"), "5,0% слів: назви 2,0%, паразити 1,5%, числа 1,0%, закінчення 0,5%; іншому мовцю 7 рядків, лише розділові знаки 12");
         assert_eq!(value("names"), "40: з малої літери 9, повтори в тій самій нараді 6");
         assert_eq!(value("repeats"), "15 з 100 виправлених слів");
+        assert_eq!(value("streams"), "2 з 5: правок 3,0% слів, іншому мовцю 1 рядків; в інших нарадах правок 6,3% слів, іншому мовцю 6 рядків; записів із вікна Meet 4, окремий звук збережено для 3");
+        // Streams kept, the text still from the mixed recording: the line says so
+        let unused = Facts { streams: Some((Share::default(), Share { meetings: 5, words: 2000, corrected: 100, speaker_lines: 7 })), meet_calls: (4, 2), ..Default::default() };
+        assert_eq!(lines(&unused).iter().find(|x| x.key == "streams").map(|x| x.value.clone()).unwrap_or_default(), "0 з 5; записів із вікна Meet 4, окремий звук збережено для 2");
+        // No streams anywhere: no line
+        let none = Facts { streams: Some((Share::default(), Share { meetings: 5, words: 2000, corrected: 100, speaker_lines: 7 })), meet_calls: (4, 0), ..Default::default() };
+        assert!(lines(&none).iter().all(|x| x.key != "streams"));
         assert!(l.iter().all(|x| x.key != "captions"), "no captions, no line");
         use super::super::captions_check::{CaptionsCheck, Flags};
         let f = Facts {

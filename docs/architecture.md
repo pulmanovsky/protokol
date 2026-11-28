@@ -44,6 +44,22 @@ flowchart LR
   text.
 - A floating «island» (`island.rs`) shows the timer and stop. The app's
   windows are hidden from screen sharing by default (`content_protected`).
+- A Google Meet call opened in the app's own window (`meet/`) also gives
+  what the mixed recording cannot: who is lit as speaking, and each of
+  Meet's separate audio streams. While a recording runs, the page script
+  (`meet/capture.js`) sends the streams' sound with its reports and it is
+  written into the recording's folder (`meet.slots/`); with no recording
+  nothing is sent or kept, and nothing that sounded before the recording
+  started, while it was paused or after it stopped is written. The moments
+  of the pauses are kept (`pauses.json`, `audio/pauses.rs`), so the call's
+  tiles and streams go on from where the recording was paused, as its sound
+  does. After the recording «Спікери» hears such a call
+  stream by stream (`speakers/slots.rs`): people who talk at once get lines
+  of their own, and each piece of speech has the speaker Meet showed. Only
+  the stretches with sound stay with the recording (`meet-streams/`,
+  `meet-streams.json`); what the window sent is deleted. With the setting
+  «Ділити репліки за учасниками Google Meet» off, or without the streams,
+  the call is heard from the mixed recording as before.
 
 ### 1.2 Import (`audio/import.rs`)
 
@@ -211,7 +227,10 @@ a reminder before each meeting starts a recording with the event's title.
 - Meeting folder (by default `~/Movies/Protokol/<title>/`; installs that already had `meetily-recordings` keep it):
   `audio.mp4` (the mix), `system.m4a` (the call only, recordings),
   `channels.json` (levels), `transcripts.json`, `words.json` (word times),
-  `metadata.json`.
+  `metadata.json`, `pauses.json` (when it was paused, if it was); for a Meet
+  call recorded in the app's window also
+  `meet.json` (who was lit when) and `meet-streams/` with `meet-streams.json`
+  (the sound of Meet's separate streams, the stretches with speech only).
 - App data (`~/Library/Application Support/ua.protokol.app/`; builds before 0.3.7 used `com.meetily.ai`, copied once on the first start): the database,
   `glossary.txt`, `glossary_meta.json` (what was learned), `corrections.txt`
   (`wrong => right`, `!` in front = off), `meeting-types/`, `calendar.json`.

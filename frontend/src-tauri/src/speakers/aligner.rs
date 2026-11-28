@@ -522,7 +522,7 @@ mod tests {
     #[test]
     fn the_part_being_heard_goes_first() {
         use crate::speakers::words::PieceWords;
-        let piece = |a: f64, b: f64| PieceWords { start: a, end: b, text: String::new(), words: vec![("x".into(), a)], probs: vec![], auto: vec![], aligned: false, heard: vec![], bars: None };
+        let piece = |a: f64, b: f64| PieceWords { start: a, end: b, text: String::new(), words: vec![("x".into(), a)], probs: vec![], auto: vec![], aligned: false, heard: vec![], bars: None, who: None };
         let pieces = vec![piece(0.0, 10.0), piece(10.0, 20.0), piece(20.0, 30.0), piece(30.0, 40.0)];
         let mut left = vec![true; 4];
         // Nothing heard: in order
@@ -540,7 +540,7 @@ mod tests {
     #[test]
     fn corrected_pieces_keep_their_words() {
         use crate::speakers::words::PieceWords;
-        let piece = |w: &[(&str, f64)], aligned: bool| PieceWords { start: 0.0, end: 3.0, text: String::new(), words: w.iter().map(|(a, b)| (a.to_string(), *b)).collect(), probs: vec![], auto: vec![], aligned, heard: vec![], bars: None };
+        let piece = |w: &[(&str, f64)], aligned: bool| PieceWords { start: 0.0, end: 3.0, text: String::new(), words: w.iter().map(|(a, b)| (a.to_string(), *b)).collect(), probs: vec![], auto: vec![], aligned, heard: vec![], bars: None, who: None };
         let mut now = vec![piece(&[("так", 0.0), ("ні", 1.0)], false), piece(&[("нове", 0.0)], false)];
         let aligned = vec![piece(&[("так", 0.4), ("ні", 1.2)], true), piece(&[("старе", 0.7)], true)];
         assert_eq!(super::take_aligned(&mut now, &aligned), 1);

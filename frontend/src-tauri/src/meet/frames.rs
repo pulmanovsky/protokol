@@ -136,6 +136,29 @@ impl MeetCall {
         }
         out
     }
+
+    /// The call on the recording's clock: the wall clock with the recording's
+    /// pauses taken out. Frames of a pause are left out and the later ones
+    /// follow the earlier at once, as the recording's sound does; a caption
+    /// seen only during a pause is left out too.
+    fn without(mut self, pauses: &crate::audio::pauses::Pauses) -> MeetCall {
+        if pauses.is_empty() {
+            return self;
+        }
+        let kept: Vec<(usize, f64)> = self.t.iter().enumerate().filter_map(|(i, t)| pauses.on_recording(*t).map(|t| (i, t))).collect();
+        self.level = kept.iter().map(|(i, _)| self.level[*i]).collect();
+        self.lit = kept.iter().map(|(i, _)| std::mem::take(&mut self.lit[*i])).collect();
+        self.t = kept.into_iter().map(|(_, t)| t).collect();
+        self.captions.retain(|c| !(pauses.within(c.t0) && pauses.within(c.t1) && pauses.clamp(c.t0) == pauses.clamp(c.t1)));
+        for c in &mut self.captions {
+            c.t0 = pauses.clamp(c.t0);
+            c.t1 = pauses.clamp(c.t1);
+            for g in &mut c.grew {
+                g.1 = pauses.clamp(g.1);
+            }
+        }
+        self
+    }
 }
 
 /// A report sent while the Meet page was hidden (capture.js `visible`) whose
@@ -241,14 +264,23 @@ pub fn recording_start_ms(folder: &Path) -> Option<f64> {
 }
 
 /// The call that went with a recording: its own copy, or the reports of the
-/// time it was recorded (then copied into its folder)
+/// time it was recorded (then copied into its folder). It is on the
+/// recording's clock: where the recording was paused, the call's frames go
+/// on from that moment as the recording's sound does (`audio::pauses`).
 pub fn for_recording(folder: &Path, duration_s: f64) -> Option<MeetCall> {
     if let Some(call) = load_folder(folder) {
         return Some(call);
     }
     let start = recording_start_ms(folder)?;
+    let pauses = crate::audio::pauses::of(folder);
     // Two minutes on both sides: the clocks are lined up by the sound later
-    let call = load_span(&sessions_dirs(), start - 120_000.0, start + duration_s * 1000.0 + 120_000.0)?;
+    let call = load_span(&sessions_dirs(), start - 120_000.0, start + duration_s * 1000.0 + pauses.total() + 120_000.0)?.without(&pauses);
+    if call.is_empty() {
+        return None;
+    }
+    if !pauses.is_empty() {
+        info!("Meet: the recording was paused {} time(s), {:.1} s in all; the call's frames go on from where it was paused", pauses.count(), pauses.total() / 1000.0);
+    }
     save_folder(folder, &call);
     Some(call)
 }
@@ -284,6 +316,49 @@ mod tests {
         assert_eq!(span.t, vec![9_900.0, 10_000.0, 11_900.0]);
         assert_eq!(span.names, vec!["Анна".to_string(), "Борис".to_string()]);
         assert_eq!(span.lit, vec![vec![0], vec![0, 1], vec![1]]);
+    }
+
+    #[test]
+    fn a_paused_recording_has_the_call_without_its_pauses() {
+        // Frames every 100 ms for 10 s; the recording was paused from 3 s to 7 s
+        let mut call = MeetCall { v: 2, names: vec!["Анна".to_string(), "Борис".to_string()], ..Default::default() };
+        for f in 0..100 {
+            call.t.push(1_000_000.0 + f as f64 * 100.0);
+            call.level.push(f as u32);
+            call.lit.push(vec![if f < 50 { 0 } else { 1 }]);
+        }
+        let caption = |key: &str, t0: f64, t1: f64| crate::meet::captions::Caption { key: key.to_string(), who: "Анна".to_string(), text: "так".to_string(), t0, t1, grew: vec![(1, t1)] };
+        call.captions = vec![caption("a", 1_001_000.0, 1_002_000.0), caption("b", 1_004_000.0, 1_005_000.0), caption("c", 1_006_500.0, 1_008_000.0)];
+        let pauses = crate::audio::pauses::Pauses::new(vec![(1_003_000.0, 1_007_000.0)]);
+        let got = call.clone().without(&pauses);
+        // 3 s before the pause and 3 s after it, one after the other
+        assert_eq!(got.t.len(), 60);
+        assert_eq!((got.t[29], got.t[30], got.t[59]), (1_002_900.0, 1_003_000.0, 1_005_900.0));
+        assert_eq!((got.level[29], got.level[30]), (29, 70));
+        assert_eq!((got.lit[29].clone(), got.lit[30].clone()), (vec![0], vec![1]));
+        // The caption of the pause is gone; the one that went on after it starts where the recording did
+        assert_eq!(got.captions.iter().map(|c| (c.key.as_str(), c.t0, c.t1)).collect::<Vec<_>>(), vec![("a", 1_001_000.0, 1_002_000.0), ("c", 1_003_000.0, 1_004_000.0)]);
+        assert_eq!(got.captions[1].grew, vec![(1, 1_004_000.0)]);
+        // Never paused: as it was
+        assert_eq!(call.clone().without(&Default::default()), call);
+
+        // From the reports to the recording's folder
+        let dir = std::env::temp_dir().join(format!("meet-frames-paused-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let start = chrono::DateTime::from_timestamp(1_700_000_010, 0).unwrap();
+        fs::write(dir.join("metadata.json"), serde_json::json!({ "created_at": start.to_rfc3339() }).to_string()).unwrap();
+        let t0 = start.timestamp_millis() as f64;
+        fs::write(dir.join(crate::audio::pauses::FILE), serde_json::json!({ "v": 1, "pauses": [[t0 + 3_000.0, t0 + 7_000.0]] }).to_string()).unwrap();
+        let mut call = MeetCall { v: 2, names: vec!["Анна".to_string()], ..Default::default() };
+        for f in 0..100 {
+            call.t.push(t0 + f as f64 * 100.0);
+            call.level.push(0);
+            call.lit.push(vec![0]);
+        }
+        let got = call.without(&crate::audio::pauses::of(&dir));
+        assert_eq!((got.t.len(), got.t[30]), (60, t0 + 3_000.0));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

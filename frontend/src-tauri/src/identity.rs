@@ -13,6 +13,29 @@ use std::path::{Path, PathBuf};
 pub const IDENTIFIER: &str = "ua.protokol.app";
 pub const OLD_IDENTIFIER: &str = "com.meetily.ai";
 
+/// The identifier of the app that runs: its bundle's own (a test build ships
+/// under another one, with its own data, so its journal and settings must not
+/// land in the installed app's folders), or IDENTIFIER outside a bundle
+pub fn running() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| bundle_identifier().unwrap_or_else(|| IDENTIFIER.to_string()))
+}
+
+/// `CFBundleIdentifier` of the bundle the executable sits in (Contents/MacOS/…)
+fn bundle_identifier() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let text = fs::read_to_string(exe.parent()?.parent()?.join("Info.plist")).ok()?;
+    identifier_in(&text)
+}
+
+fn identifier_in(plist: &str) -> Option<String> {
+    let rest = &plist[plist.find("<key>CFBundleIdentifier</key>")?..];
+    let a = rest.find("<string>")? + "<string>".len();
+    let b = a + rest[a..].find("</string>")?;
+    let id = rest[a..b].trim();
+    (!id.is_empty()).then(|| id.to_string())
+}
+
 /// Tables only Protokol's own migrations create
 const OWN_TABLES: [&[u8]; 2] = [b"speaker_overrides", b"edit_journal"];
 
@@ -139,6 +162,15 @@ mod tests {
         assert!(copy_once(&old, &new, is_protokol_data).unwrap());
         assert!(!new.join("half").exists());
         assert!(new.join("meeting_minutes.sqlite").exists());
+    }
+
+    #[test]
+    fn the_bundle_identifier_is_read_from_info_plist() {
+        let plist = "<dict>\n\t<key>CFBundleName</key>\n\t<string>Протокол</string>\n\t<key>CFBundleIdentifier</key>\n\t<string>ua.protokol.meettest</string>\n</dict>";
+        assert_eq!(identifier_in(plist).as_deref(), Some("ua.protokol.meettest"));
+        assert_eq!(identifier_in("<dict></dict>"), None);
+        // Outside a bundle (tests, eval runs) the installed app's identifier
+        assert_eq!(running(), IDENTIFIER);
     }
 
     #[test]

@@ -461,18 +461,25 @@ pub async fn api_learning_report(app: AppHandle, state: tauri::State<'_, crate::
     let mac = [model, memory].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", ");
     let applied = crate::learned_events::api_learned_summary(None).await.map(|s| s.applied.iter().map(|(_, n)| n).sum::<usize>()).unwrap_or(0);
     let undone = crate::ukrainian::corrections::all_corrections().iter().filter(|c| c.hint_only).count();
+    let quality = super::corrected::quality(state.db_manager.pool(), &p.models, MODEL_FILE).await.ok();
+    let newest: Vec<&super::corrected::Meeting> = quality.iter().flat_map(|q| q.meetings.iter().rev().take(super::corrected::REPORTED)).collect();
+    let mut streams = (super::report::Share::default(), super::report::Share::default());
+    for m in &newest {
+        if m.streams { streams.0.add(m) } else { streams.1.add(m) }
+    }
     Ok(super::report::lines(&super::report::Facts {
         app_version: app.package_info().version.to_string(),
         mac,
         checked_hours: checked_hours(state.db_manager.pool()).await,
         history: versions::history(&p.models),
         auto_fixes: Some((applied, undone)),
-        edits: super::corrected::quality(state.db_manager.pool(), &p.models, MODEL_FILE).await.ok().map(|q| {
-            let newest: Vec<_> = q.meetings.iter().rev().take(super::corrected::REPORTED).collect();
+        edits: quality.as_ref().map(|_| {
             let mut e = super::corrected::Edits::default();
             newest.iter().for_each(|m| e.add(&m.edits));
             (newest.len(), newest.iter().map(|m| m.words).sum(), e)
         }),
+        streams: Some(streams),
+        meet_calls: (newest.iter().filter(|m| m.meet).count(), newest.iter().filter(|m| m.streams_kept).count()),
         captions: super::captions_check::check(state.db_manager.pool(), super::corrected::REPORTED).await.ok().flatten(),
     }))
 }

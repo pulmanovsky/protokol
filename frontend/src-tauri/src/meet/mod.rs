@@ -76,15 +76,85 @@ const POP_FOR: Duration = Duration::from_secs(12);
 static CHOSEN_AT: AtomicU64 = AtomicU64::new(0);
 const CAPTURE_JS: &str = include_str!("capture.js");
 
-/// Test runs only: presses Meet's «Admit» / «Admit all» (and its confirmation)
+/// Each stream's own sound, which the page sends with its reports while a
+/// recording runs, goes to that recording's folder (`speakers::slots`: Meet
+/// calls are then recognised stream by stream) and never stays in the report.
+/// Only what sounded while the recording recorded is written: nothing from
+/// before its start, from a pause or from after its stop. With no recording
+/// it is dropped, and so it is (`keep` false) with «Ділити репліки за
+/// учасниками Google Meet» off: nothing is kept that will not be used. A
+/// test build told to keep all of it (PROTOKOL_TEST_MEET_SLOTS=1) writes it
+/// beside the report instead: `<report>.slots/`.
+fn take_slots(report_path: &std::path::Path, report: &mut serde_json::Value, keep: bool) {
+    let Some(slots) = report.as_object_mut().and_then(|o| o.remove("slots")) else { return };
+    #[cfg(feature = "test-hooks")]
+    if std::env::var("PROTOKOL_TEST_MEET_SLOTS").as_deref() == Ok("1") {
+        crate::speakers::slots::write_blocks(&report_path.with_extension("slots"), &slots, &|_, _| true);
+        return;
+    }
+    let _ = report_path;
+    if keep {
+        crate::speakers::slots::take(&slots);
+    }
+}
+
+/// Test runs only: lets guests in without a click. Presses Meet's «Admit» /
+/// «Admit all» (and its confirmation); when someone waits but no such button
+/// shows, opens what shows them: the «N guests waiting» chip, the «wants to
+/// join» notice or the People panel
 #[cfg(feature = "test-hooks")]
-const TEST_ADMIT_JS: &str = r#"if (location.hostname === 'meet.google.com' && window.top === window) setInterval(() => {
-  for (const b of document.querySelectorAll('button, [role="button"]')) {
-    const t = (b.innerText || '').replace(/\s+/g, ' ').trim();
-    if (/^(admit|admit all|впустити|впустити всіх|прийняти|прийняти всіх)$/i.test(t) && b.getClientRects().length) b.click();
-  }
-}, 2000);
+const TEST_ADMIT_JS: &str = r#"if (location.hostname === 'meet.google.com' && window.top === window) {
+  let opened = 0;
+  const text = (b) => (b.innerText || b.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+  setInterval(() => {
+    const shown = [...document.querySelectorAll('button, [role="button"]')].filter((b) => b.getClientRects().length);
+    const admit = shown.filter((b) => /^(admit|впустити|прийняти)( all| всіх)?( \d+.*)?$/i.test(text(b)));
+    if (admit.length) { admit.forEach((b) => b.click()); return; }
+    const body = document.body ? document.body.innerText : '';
+    if (!/(wants? to join|asking to join|waiting to join|guests? waiting|(people|person) waiting|waiting to be admitted|хоче приєднатися|хочуть приєднатися|просить приєднатися|чекають|очікують)/i.test(body)) return;
+    if (Date.now() - opened < 8000) return;
+    opened = Date.now();
+    // Meet's «2 guests waiting» chip opens the list with «Admit all»
+    const chip = shown.find((b) => /^\d+ (guests?|people|person) waiting/i.test(text(b)));
+    if (chip) { chip.click(); return; }
+    const notice = shown.find((b) => /^(view|view all|переглянути|переглянути всіх)$/i.test(text(b)));
+    if (notice) { notice.click(); return; }
+    const people = shown.find((b) => /^(people|show everyone|учасники|показати всіх|люди)/i.test(b.getAttribute('aria-label') || '') && b.getAttribute('aria-pressed') !== 'true');
+    if (people) people.click();
+  }, 2000);
+}
 "#;
+
+/// Test runs only: the host joins the call by itself once (Join now)
+#[cfg(feature = "test-hooks")]
+const TEST_JOIN_JS: &str = r#"if (location.hostname === 'meet.google.com' && window.top === window) {
+  // From Meet's start page to a new meeting once, as the app's «Створити» does
+  if (/^\/((home|landing)\/?)?$/.test(location.pathname) && !sessionStorage.getItem('protokolTestNew')) {
+    sessionStorage.setItem('protokolTestNew', '1');
+    setTimeout(() => { location.href = 'https://meet.google.com/new'; }, 4000);
+  }
+  let joined = false;
+  const t = setInterval(() => {
+    if (joined) return clearInterval(t);
+    for (const b of document.querySelectorAll('button, [role="button"]')) {
+      const x = (b.innerText || '').replace(/\s+/g, ' ').trim();
+      if (/^(join now|приєднатися|приєднатися зараз)$/i.test(x) && b.getClientRects().length) { b.click(); joined = true; break; }
+    }
+  }, 2000);
+}
+"#;
+
+/// Test runs only: PROTOKOL_TEST_MEET_URL opens the Meet window at that address a few seconds after start
+#[cfg(feature = "test-hooks")]
+pub fn test_open_at_start<R: Runtime>(app: &AppHandle<R>) {
+    let Ok(url) = std::env::var("PROTOKOL_TEST_MEET_URL") else { return };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let a = app.clone();
+        let _ = app.run_on_main_thread(move || { if let Err(e) = open(&a, Some(&url), None) { warn!("test Meet open: {e}"); } });
+    });
+}
 
 /// Test runs only: Meet gets a silent microphone and a blank camera made in
 /// the page, so a rebuilt test copy joins a call without asking macOS for
@@ -118,22 +188,30 @@ const TEST_NO_DEVICES_JS: &str = r#"if (location.hostname === 'meet.google.com' 
 }
 "#;
 
-/// The script for the Meet page. Test runs only (`test-hooks`, never the
+/// The script for the Meet page. PROTOKOL_MEET_STREAMS=0 (in the app's
+/// environment) keeps it from copying the streams' own sound while a
+/// recording runs, so calls are recognised from the mixed recording as
+/// before. Test runs only (`test-hooks`, never the
 /// release dmg): PROTOKOL_TEST_CAPTIONS_LANG=<name>:<code> (English:en) makes
 /// it set another captions language, and it notes in its reports what Meet
 /// shows around its captions, to follow how they were turned on; the other
 /// PROTOKOL_TEST_* switches below admit guests, stand in for the devices and
-/// copy each stream's sound.
+/// copy each stream's sound all the time.
 fn page_script() -> String {
+    let streams = if std::env::var("PROTOKOL_MEET_STREAMS").as_deref() == Ok("0") { "window.__protokolStreams = false;\n" } else { "" };
     #[cfg(feature = "test-hooks")]
     {
-        let mut pre = String::from("window.__protokolCaptionsDump = true;\n");
+        let mut pre = format!("{streams}window.__protokolCaptionsDump = true;\n");
         if let Some((name, code)) = std::env::var("PROTOKOL_TEST_CAPTIONS_LANG").ok().as_deref().and_then(|v| v.split_once(':')) {
             pre.push_str(&format!("window.__protokolCaptionsLang = {};\n", serde_json::json!({ "name": name, "code": code })));
         }
         // PROTOKOL_TEST_ADMIT=1: guests asking to join a test call are let in
         if std::env::var("PROTOKOL_TEST_ADMIT").as_deref() == Ok("1") {
             pre.push_str(TEST_ADMIT_JS);
+        }
+        // PROTOKOL_TEST_JOIN=1: the host presses Join now once
+        if std::env::var("PROTOKOL_TEST_JOIN").as_deref() == Ok("1") {
+            pre.push_str(TEST_JOIN_JS);
         }
         // PROTOKOL_TEST_NO_DEVICES=1: a silent microphone and a blank camera for Meet
         if std::env::var("PROTOKOL_TEST_NO_DEVICES").as_deref() == Ok("1") {
@@ -146,7 +224,7 @@ fn page_script() -> String {
         return format!("{pre}{CAPTURE_JS}");
     }
     #[allow(unreachable_code)]
-    CAPTURE_JS.to_string()
+    format!("{streams}{CAPTURE_JS}")
 }
 /// Safari's own user agent: Meet supports Safari and may refuse an unknown WebKit browser
 const SAFARI_UA: &str =
@@ -307,6 +385,8 @@ pub fn open<R: Runtime>(app: &AppHandle<R>, url: Option<&str>, title: Option<Str
     if let Some(dir) = sessions_dir(app) {
         prune(&dir);
     }
+    // Streams kept for recordings that were never read afterwards
+    std::thread::spawn(|| crate::speakers::slots::sweep(&crate::audio::recording_preferences::recordings_folder()));
     let file = new_report_file(app);
     if let Some(f) = &file {
         info!("Meet: reports go to {}", f.display());
@@ -640,12 +720,10 @@ pub async fn meet_open<R: Runtime>(app: AppHandle<R>, url: Option<String>, title
 /// pill shows: whether a recording runs and for how long.
 #[tauri::command]
 async fn push<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, report: serde_json::Value) -> Result<live::PageState, String> {
+    #[allow(unused_mut)]
+    let mut report = report;
     if webview.label() != PAGE_LABEL {
         return Err("not the Meet page".into());
-    }
-    let line = serde_json::to_string(&report).map_err(|e| e.to_string())?;
-    if line.len() > MAX_REPORT_BYTES {
-        return Err("report too large".into());
     }
     let path = {
         let mut guard = REPORT_FILE.lock().unwrap();
@@ -655,6 +733,17 @@ async fn push<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, report: serde_
         guard.clone()
     };
     let Some(path) = path else { return Err("no report folder".into()) };
+    if report.get("slots").is_some() {
+        let keep = match pool(&app) {
+            Some(p) => split_on(&p).await,
+            None => true,
+        };
+        take_slots(&path, &mut report, keep);
+    }
+    let line = serde_json::to_string(&report).map_err(|e| e.to_string())?;
+    if line.len() > MAX_REPORT_BYTES {
+        return Err("report too large".into());
+    }
     {
         // One line in one write, one report at a time: two reports arriving
         // together must not end up glued on one line
@@ -727,7 +816,7 @@ fn window_state<R: Runtime>(webview: &Webview<R>, report: &serde_json::Value) {
 static CAPTIONS_STATE: Mutex<Option<(String, String)>> = Mutex::new(None);
 
 /// A line in the journal whenever the captions' state in the call changes:
-/// turned on and out of sight, left to the person, or not turned on (the
+/// turned on, left to the person, or not turned on (the
 /// call then has no second text to check against: MEET-NO-CAPTIONS)
 fn captions_state(report: &serde_json::Value) {
     let field = |key: &str, keep: fn(char) -> bool, max: usize| -> String {
